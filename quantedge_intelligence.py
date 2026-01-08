@@ -11,164 +11,128 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from datetime import datetime
 from scipy.stats import norm
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="QuantEdge India", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="QuantEdge India", layout="wide")
 
-# --- HIGH-CONTRAST UI THEME ---
+# --- HIGH-VISIBILITY COLOR PALETTE ---
 st.markdown("""
     <style>
-    /* Background and Main Text */
-    .stApp {
-        background-color: #050a14;
-        color: #e0e0e0;
+    .stApp { background-color: #0a0e14; color: #ffffff; }
+    [data-testid="stMetricValue"] { color: #ffffff !important; font-weight: 800 !important; font-size: 2rem !important; }
+    [data-testid="stMetricLabel"] { color: #3b82f6 !important; font-weight: 600 !important; }
+    [data-testid="metric-container"] { 
+        background-color: #161b22; 
+        border: 2px solid #3b82f6; 
+        border-radius: 10px; 
+        padding: 15px;
     }
-    
-    /* Sidebar styling */
-    section[data-testid="stSidebar"] {
-        background-color: #0b1426;
-        border-right: 1px solid #1f2937;
-    }
-    
-    /* Metrics Boxes - High Visibility */
-    div[data-testid="stMetricValue"] {
-        font-size: 1.8rem !important;
-        font-weight: 700 !important;
-        color: #ffffff !important;
-    }
-    div[data-testid="stMetricLabel"] {
-        color: #94a3b8 !important; /* Soft grey for labels */
-        font-size: 1rem !important;
-        text-transform: uppercase;
-    }
-    [data-testid="metric-container"] {
-        background-color: #111b2e;
-        border: 1px solid #3b82f6;
-        border-radius: 12px;
-        padding: 20px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
-    }
-
-    /* Headlines */
-    h1, h2, h3 {
-        color: #3b82f6 !important; /* Electric Blue */
-        font-family: 'Inter', sans-serif;
-    }
-    
-    /* Buttons */
-    .stButton > button {
-        background-color: #3b82f6;
-        color: white;
-        border-radius: 8px;
-        width: 100%;
-        border: none;
-    }
-    
-    /* Divider color */
-    hr {
-        border-top: 1px solid #1f2937;
-    }
+    h1, h2, h3 { color: #3b82f6 !important; }
+    .stButton>button { background-color: #3b82f6; color: white; border-radius: 5px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- SIDEBAR CONTROLS ---
-st.sidebar.title("🔍 Parameters")
-ticker_input = st.sidebar.text_input("NSE/BSE Ticker", "RELIANCE.NS")
-capital = st.sidebar.number_input("Capital (₹)", value=1000000)
+# --- SIDEBAR: DYNAMIC INPUTS ---
+st.sidebar.header("⚙️ Strategy Parameters")
+ticker = st.sidebar.text_input("Indian Stock Ticker (e.g., SBIN.NS)", "RELIANCE.NS")
+capital = st.sidebar.number_input("Trading Capital (₹)", value=1000000)
 risk_per_trade = st.sidebar.slider("Risk per Trade (%)", 0.1, 5.0, 1.0) / 100
 
 # --- DATA ENGINE ---
 @st.cache_data
-def load_data(ticker):
-    try:
-        data = yf.download(ticker, start="2000-01-01")
-        if data.empty: return None
-        # Handle Multi-index columns if necessary
-        data.columns = [c[0] if isinstance(c, tuple) else c for c in data.columns]
-        return data
-    except:
-        return None
+def load_full_data(symbol):
+    df = yf.download(symbol, start="2000-01-01")
+    if df.empty: return None
+    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+    return df
 
-data = load_data(ticker_input)
+data = load_full_data(ticker)
 
 if data is not None:
-    # Basic Calculations
+    # --- 1. REGIME DETECTION LOGIC ---
     data['Returns'] = data['Close'].pct_change()
     window = 20
-    data['SMA20'] = data['Close'].rolling(window).mean()
-    data['Std'] = data['Close'].rolling(window).std()
+    # Rolling R-Squared (Trend Strength)
+    def get_r2(x):
+        y = np.array(x); x_ax = np.arange(len(y))
+        slope, intercept = np.polyfit(x_ax, y, 1)
+        return 1 - (np.sum((y - (slope * x_ax + intercept))**2) / ((len(y) - 1) * np.var(y)))
+    
+    data['Trend_Strength'] = data['Close'].rolling(window).apply(get_r2)
+    vol_regime = data['Returns'].rolling(window).std() * np.sqrt(252)
+    
+    st.title(f"📊 {ticker} Strategic Analysis")
 
-    # --- DASHBOARD HEADER ---
-    st.title(f"📈 {ticker_input} Analytics")
-    
-    # --- MODULE 1: REGIME & VOLATILITY ---
-    c1, c2, c3 = st.columns(3)
-    
-    # Calculation for Vol & Regime
-    vol = data['Returns'].rolling(20).std().iloc[-1] * np.sqrt(252)
-    z_score = (data['Returns'].iloc[-1] - data['Returns'].rolling(100).mean().iloc[-1]) / data['Returns'].rolling(100).std().iloc[-1]
-    
-    with c1:
-        st.metric("Annual Volatility", f"{vol:.2%}")
-    with c2:
-        regime_label = "Trending" if data['Close'].iloc[-1] > data['SMA20'].iloc[-1] else "Mean Reverting"
-        st.metric("Market Regime", regime_label)
-    with c3:
-        st.metric("Anomaly Score", f"{z_score:.2f} σ")
+    # --- ROW 1: REGIME & ALERTS ---
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("1) Regime Detection & Rare Events")
+        curr_r2 = data['Trend_Strength'].iloc[-1]
+        regime = "TRENDING" if curr_r2 > 0.6 else "MEAN REVERTING"
+        st.metric("Detected Regime", regime, delta=f"R²: {curr_r2:.2f}")
+        
+        # Rare Events
+        z_score = (data['Returns'].iloc[-1] - data['Returns'].rolling(100).mean().iloc[-1]) / data['Returns'].rolling(100).std().iloc[-1]
+        if abs(z_score) > 2: st.error(f"⚠️ RARE EVENT: {z_score:.2f}σ Move Detected")
+        else: st.info("Price Action: Normal Distribution")
 
-    # --- MAIN CHART ---
+    # --- ROW 2: BACKTESTING ENGINE ---
+    st.divider()
+    st.subheader("2) Auto-Signal Quality Backtester")
+    s1, s2 = st.sidebar.columns(2)
+    fast_ma = s1.number_input("Fast MA", 5, 50, 20)
+    slow_ma = s2.number_input("Slow MA", 20, 200, 50)
+    
+    data['F_MA'] = data['Close'].rolling(fast_ma).mean()
+    data['S_MA'] = data['Close'].rolling(slow_ma).mean()
+    data['Signal'] = np.where(data['F_MA'] > data['S_MA'], 1, 0)
+    data['Strat_Ret'] = data['Signal'].shift(1) * data['Returns']
+    
+    b1, b2, b3 = st.columns(3)
+    b1.metric("Strategy Return", f"{(1+data['Strat_Ret']).prod()-1:.2%}")
+    b2.metric("Sharpe Ratio", f"{(data['Strat_Ret'].mean()/data['Strat_Ret'].std())*np.sqrt(252):.2f}")
+    b3.metric("Max Drawdown", f"{( (1+data['Strat_Ret']).cumprod() / (1+data['Strat_Ret']).cumprod().cummax() - 1 ).min():.2%}")
+
+    # --- ROW 3: POSITION SIZING & PROBABILITY ---
+    st.divider()
+    st.subheader("3) Position Sizing & 4) Probability Forecaster")
+    p1, p2, p3 = st.columns(3)
+    
+    # Kelly & ATR
+    atr = (data['High'] - data['Low']).rolling(14).mean().iloc[-1]
+    kelly = 0.20 # Sample half-kelly
+    units = int((capital * risk_per_trade) / (atr * 2))
+    
+    p1.metric("Recommended Qty (ATR)", f"{units} Shares")
+    p2.metric("Kelly Fraction", f"{kelly:.1%}")
+    
+    # Probabilities
+    prob_rev = norm.cdf(abs((data['Close'].iloc[-1] - data['F_MA'].iloc[-1])/data['Close'].rolling(20).std().iloc[-1]))
+    p3.metric("Reversal Probability", f"{prob_rev:.1%}")
+
+    # --- ROW 4: PORTFOLIO SIMULATOR ---
+    st.divider()
+    st.subheader("6) Portfolio Contribution Simulator (SIP)")
+    sip_amt = st.number_input("Monthly SIP Amount (₹)", value=10000)
+    # Simplified SIP math
+    total_months = len(data) // 21
+    total_invested = sip_amt * total_months
+    # This is a proxy for rolling returns
+    final_val = total_invested * (1 + data['Returns'].mean() * 252) 
+    
+    c1, c2 = st.columns(2)
+    c1.metric("Total Invested", f"₹{total_invested:,.0f}")
+    c2.metric("Projected Value", f"₹{final_val:,.0f}")
+
+    # --- VISUALS ---
+    st.subheader("Price Action & Strategy Equity Curve")
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data.index, y=data['Close'], name="Price", line=dict(color='#3b82f6', width=2)))
-    fig.add_trace(go.Scatter(x=data.index, y=data['SMA20'], name="20 SMA", line=dict(color='#94a3b8', dash='dot')))
-    fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(l=0, r=0, t=30, b=0),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
+    fig.add_trace(go.Scatter(x=data.index, y=data['Close'], name="Price", line=dict(color='#3b82f6')))
+    fig.add_trace(go.Scatter(x=data.index, y=(1+data['Strat_Ret']).cumprod()*data['Close'].iloc[0], name="Strategy Equity", line=dict(color='#00ffcc')))
+    fig.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- MODULE 2: POSITION SIZING & RISK ---
-    st.subheader("🛡️ Risk Management")
-    r1, r2, r3 = st.columns(3)
-    
-    # ATR Calculation
-    high_low = data['High'] - data['Low']
-    true_range = high_low.rolling(14).mean().iloc[-1]
-    
-    risk_amt = capital * risk_per_trade
-    shares = int(risk_amt / (true_range * 2)) if true_range > 0 else 0
-    
-    with r1:
-        st.metric("Risk Amount", f"₹{risk_amt:,.0f}")
-    with r2:
-        st.metric("ATR Stop (2x)", f"₹{true_range*2:.2f}")
-    with r3:
-        st.metric("Suggested Units", f"{shares} Qty")
-
-    # --- MODULE 3: STRATEGY BACKTEST ---
-    st.subheader("🧪 Backtest: SMA Crossover")
-    fast = st.sidebar.number_input("Fast SMA", 5, 50, 20)
-    slow = st.sidebar.number_input("Slow SMA", 20, 200, 50)
-    
-    df_bt = data[['Close']].copy()
-    df_bt['F'] = df_bt['Close'].rolling(fast).mean()
-    df_bt['S'] = df_bt['Close'].rolling(slow).mean()
-    df_bt['Sig'] = np.where(df_bt['F'] > df_bt['S'], 1, 0)
-    df_bt['Strat_Ret'] = df_bt['Sig'].shift(1) * data['Returns']
-    
-    cum_strat = (1 + df_bt['Strat_Ret']).prod() - 1
-    
-    fig_bt = px.line(df_bt, x=df_bt.index, y=(1+df_bt['Strat_Ret']).cumprod(), 
-                     title="Equity Curve", color_discrete_sequence=['#3b82f6'])
-    fig_bt.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-    st.plotly_chart(fig_bt, use_container_width=True)
-    
-    st.sidebar.success(f"Total Strategy Return: {cum_strat:.2%}")
-
 else:
-    st.warning("⚠️ Enter a valid ticker to load the analysis dashboard.")
+    st.warning("Please enter a valid Yahoo Finance ticker (e.g., TATASTEEL.NS)")
