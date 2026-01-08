@@ -74,7 +74,7 @@ if data is not None:
     with col1:
         st.subheader("Market DNA & Price Action")
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=data.index, y=data['Close'], name="Price", line=dict(color='#00ffcc')))
+        fig.add_trace(go.Scatter(x=data.index, y=data['Close'], name="Price", line=dict(color='#808000')))
         fig.add_trace(go.Scatter(x=data.index, y=data['SMA20'], name="20d SMA", line=dict(dash='dash', color='gray')))
         fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0,r=0,b=0,t=0))
         st.plotly_chart(fig, use_container_width=True)
