@@ -11,128 +11,142 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from arch import arch_model # Use 'pip install arch'
 from datetime import datetime
-from scipy.stats import norm
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="QuantEdge India", layout="wide")
+# --- CONFIG & THEME ---
+st.set_page_config(page_title="QuantInsight India", layout="wide")
 
-# --- HIGH-VISIBILITY COLOR PALETTE ---
 st.markdown("""
     <style>
-    .stApp { background-color: #0a0e14; color: #ffffff; }
-    [data-testid="stMetricValue"] { color: #ffffff !important; font-weight: 800 !important; font-size: 2rem !important; }
-    [data-testid="stMetricLabel"] { color: #3b82f6 !important; font-weight: 600 !important; }
+    .stApp { background-color: #050a14; color: #ffffff; }
+    [data-testid="stMetricValue"] { color: #ffffff !important; font-weight: 800; }
     [data-testid="metric-container"] { 
-        background-color: #161b22; 
-        border: 2px solid #3b82f6; 
-        border-radius: 10px; 
-        padding: 15px;
+        background-color: #111827; 
+        border: 1px solid #3b82f6; 
+        border-radius: 8px; 
     }
-    h1, h2, h3 { color: #3b82f6 !important; }
-    .stButton>button { background-color: #3b82f6; color: white; border-radius: 5px; }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+    .stTabs [data-baseweb="tab"] { color: #94a3b8; }
+    .stTabs [data-baseweb="tab-highlight"] { background-color: #3b82f6; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- SIDEBAR: DYNAMIC INPUTS ---
-st.sidebar.header("⚙️ Strategy Parameters")
-ticker = st.sidebar.text_input("Indian Stock Ticker (e.g., SBIN.NS)", "RELIANCE.NS")
-capital = st.sidebar.number_input("Trading Capital (₹)", value=1000000)
-risk_per_trade = st.sidebar.slider("Risk per Trade (%)", 0.1, 5.0, 1.0) / 100
+# --- STOCK LIST DATA ---
+INDIAN_STOCKS = {
+    "RELIANCE.NS": "Reliance Industries", "TCS.NS": "TCS", "HDFCBANK.NS": "HDFC Bank",
+    "INFY.NS": "Infosys", "ICICIBANK.NS": "ICICI Bank", "SBIN.NS": "SBI",
+    "BHARTIARTL.NS": "Bharti Airtel", "LICI.NS": "LIC", "ITC.NS": "ITC",
+    "HINDUNILVR.NS": "HUL", "ADANIENT.NS": "Adani Ent", "TATASTEEL.NS": "Tata Steel"
+    # Add more as needed
+}
 
-# --- DATA ENGINE ---
+# --- FUNCTIONS ---
 @st.cache_data
-def load_full_data(symbol):
-    df = yf.download(symbol, start="2000-01-01")
-    if df.empty: return None
-    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-    return df
+def get_data(ticker):
+    stock = yf.download(ticker, start="2010-01-01")
+    nifty = yf.download("^NSEI", start="2010-01-01")
+    # Clean multi-index
+    stock.columns = [c[0] if isinstance(c, tuple) else c for c in stock.columns]
+    nifty.columns = [c[0] if isinstance(c, tuple) else c for c in nifty.columns]
+    return stock, nifty
 
-data = load_full_data(ticker)
+def calculate_metrics(df):
+    results = {}
+    for period, days in [("1Y", 252), ("2Y", 504), ("3Y", 756), ("5Y", 1260), ("MAX", len(df))]:
+        sub = df.tail(days)
+        ret = (sub['Close'].iloc[-1] / sub['Close'].iloc[0]) - 1
+        vol = sub['Close'].pct_change().std() * np.sqrt(252)
+        results[period] = {"Return": f"{ret:.2%}", "Risk (Vol)": f"{vol:.2%}"}
+    return pd.DataFrame(results).T
+
+def run_backtest(df, strategy_type, params):
+    temp = df[['Close']].copy()
+    temp['Returns'] = temp['Close'].pct_change()
+    
+    if strategy_type == "SMA":
+        temp['Fast'] = temp['Close'].rolling(params[0]).mean()
+        temp['Slow'] = temp['Close'].rolling(params[1]).mean()
+        temp['Signal'] = np.where(temp['Fast'] > temp['Slow'], 1, 0)
+    elif strategy_type == "RSI":
+        delta = temp['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+        rs = gain / loss
+        temp['RSI'] = 100 - (100 / (1 + rs))
+        temp['Signal'] = np.where(temp['RSI'] < params[0], 1, 0) # Buy when oversold
+        
+    temp['Strat_Ret'] = temp['Signal'].shift(1) * temp['Returns']
+    temp['Strat_Ret'] = temp['Strat_Ret'].fillna(0)
+    
+    cum_ret = (1 + temp['Strat_Ret']).prod() - 1
+    annual_std = temp['Strat_Ret'].std() * np.sqrt(252)
+    sharpe = (temp['Strat_Ret'].mean() * 252) / annual_std if annual_std != 0 else 0
+    trades = (temp['Signal'].diff().abs() == 1).sum()
+    
+    return cum_ret, annual_std, sharpe, trades
+
+# --- APP FLOW ---
+st.title("🏛️ Institutional-Grade Stock Intelligence")
+
+selected_stock = st.selectbox("Search & Select Indian Stock", options=list(INDIAN_STOCKS.keys()), 
+                              format_func=lambda x: f"{INDIAN_STOCKS[x]} ({x})")
+
+data, nifty = get_data(selected_stock)
 
 if data is not None:
-    # --- 1. REGIME DETECTION LOGIC ---
-    data['Returns'] = data['Close'].pct_change()
-    window = 20
-    # Rolling R-Squared (Trend Strength)
-    def get_r2(x):
-        y = np.array(x); x_ax = np.arange(len(y))
-        slope, intercept = np.polyfit(x_ax, y, 1)
-        return 1 - (np.sum((y - (slope * x_ax + intercept))**2) / ((len(y) - 1) * np.var(y)))
-    
-    data['Trend_Strength'] = data['Close'].rolling(window).apply(get_r2)
-    vol_regime = data['Returns'].rolling(window).std() * np.sqrt(252)
-    
-    st.title(f"📊 {ticker} Strategic Analysis")
+    tab1, tab2, tab3 = st.tabs(["📉 Market DNA", "🧪 Strategy Backtesting", "📋 Risk Report"])
 
-    # --- ROW 1: REGIME & ALERTS ---
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("1) Regime Detection & Rare Events")
-        curr_r2 = data['Trend_Strength'].iloc[-1]
-        regime = "TRENDING" if curr_r2 > 0.6 else "MEAN REVERTING"
-        st.metric("Detected Regime", regime, delta=f"R²: {curr_r2:.2f}")
+    # --- TAB 1: THE PULSE & GARCH ---
+    with tab1:
+        st.subheader("GARCH(1,1) Volatility Forecast")
+        returns = 100 * data['Close'].pct_change().dropna()
+        model = arch_model(returns, vol='Garch', p=1, q=1)
+        res = model.fit(disp="off")
+        forecast = res.forecast(horizon=5)
+        next_vol = np.sqrt(forecast.variance.values[-1, :]) * np.sqrt(252) / 10 # Scaled back
         
-        # Rare Events
-        z_score = (data['Returns'].iloc[-1] - data['Returns'].rolling(100).mean().iloc[-1]) / data['Returns'].rolling(100).std().iloc[-1]
-        if abs(z_score) > 2: st.error(f"⚠️ RARE EVENT: {z_score:.2f}σ Move Detected")
-        else: st.info("Price Action: Normal Distribution")
+        c1, c2 = st.columns(2)
+        c1.metric("Predicted Volatility (Next 5 Days)", f"{next_vol[0]:.2f}%")
+        
+        # Cumulative Comparison
+        st.subheader("Relative Performance: Stock vs Nifty 50")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=data.index, y=(1+data['Close'].pct_change()).cumprod(), name=selected_stock, line=dict(color="#3b82f6")))
+        fig.add_trace(go.Scatter(x=nifty.index, y=(1+nifty['Close'].pct_change()).cumprod(), name="Nifty 50", line=dict(color="#94a3b8", dash='dot')))
+        fig.update_layout(template="plotly_dark", height=400)
+        st.plotly_chart(fig, use_container_width=True)
 
-    # --- ROW 2: BACKTESTING ENGINE ---
-    st.divider()
-    st.subheader("2) Auto-Signal Quality Backtester")
-    s1, s2 = st.sidebar.columns(2)
-    fast_ma = s1.number_input("Fast MA", 5, 50, 20)
-    slow_ma = s2.number_input("Slow MA", 20, 200, 50)
-    
-    data['F_MA'] = data['Close'].rolling(fast_ma).mean()
-    data['S_MA'] = data['Close'].rolling(slow_ma).mean()
-    data['Signal'] = np.where(data['F_MA'] > data['S_MA'], 1, 0)
-    data['Strat_Ret'] = data['Signal'].shift(1) * data['Returns']
-    
-    b1, b2, b3 = st.columns(3)
-    b1.metric("Strategy Return", f"{(1+data['Strat_Ret']).prod()-1:.2%}")
-    b2.metric("Sharpe Ratio", f"{(data['Strat_Ret'].mean()/data['Strat_Ret'].std())*np.sqrt(252):.2f}")
-    b3.metric("Max Drawdown", f"{( (1+data['Strat_Ret']).cumprod() / (1+data['Strat_Ret']).cumprod().cummax() - 1 ).min():.2%}")
+    # --- TAB 2: THE PLAYBOOK (BACKTESTING) ---
+    with tab2:
+        st.subheader("Automated Strategy Performance (Long Only)")
+        
+        strategies = [
+            ("SMA Crossover", "SMA", [20, 50], "Short Term"),
+            ("Golden Cross", "SMA", [50, 200], "Long Term"),
+            ("RSI Mean Reversion", "RSI", [30], "Oversold")
+        ]
+        
+        bt_results = []
+        for name, stype, params, horizon in strategies:
+            ret, risk, sharpe, trades = run_backtest(data, stype, params)
+            bt_results.append({
+                "Strategy": name, "Horizon": horizon, "Exp. Return": f"{ret:.2%}",
+                "Risk": f"{risk:.2%}", "Sharpe": round(sharpe, 2), "Trades": trades
+            })
+        
+        st.table(pd.DataFrame(bt_results))
+        
 
-    # --- ROW 3: POSITION SIZING & PROBABILITY ---
-    st.divider()
-    st.subheader("3) Position Sizing & 4) Probability Forecaster")
-    p1, p2, p3 = st.columns(3)
-    
-    # Kelly & ATR
-    atr = (data['High'] - data['Low']).rolling(14).mean().iloc[-1]
-    kelly = 0.20 # Sample half-kelly
-    units = int((capital * risk_per_trade) / (atr * 2))
-    
-    p1.metric("Recommended Qty (ATR)", f"{units} Shares")
-    p2.metric("Kelly Fraction", f"{kelly:.1%}")
-    
-    # Probabilities
-    prob_rev = norm.cdf(abs((data['Close'].iloc[-1] - data['F_MA'].iloc[-1])/data['Close'].rolling(20).std().iloc[-1]))
-    p3.metric("Reversal Probability", f"{prob_rev:.1%}")
-
-    # --- ROW 4: PORTFOLIO SIMULATOR ---
-    st.divider()
-    st.subheader("6) Portfolio Contribution Simulator (SIP)")
-    sip_amt = st.number_input("Monthly SIP Amount (₹)", value=10000)
-    # Simplified SIP math
-    total_months = len(data) // 21
-    total_invested = sip_amt * total_months
-    # This is a proxy for rolling returns
-    final_val = total_invested * (1 + data['Returns'].mean() * 252) 
-    
-    c1, c2 = st.columns(2)
-    c1.metric("Total Invested", f"₹{total_invested:,.0f}")
-    c2.metric("Projected Value", f"₹{final_val:,.0f}")
-
-    # --- VISUALS ---
-    st.subheader("Price Action & Strategy Equity Curve")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=data.index, y=data['Close'], name="Price", line=dict(color='#3b82f6')))
-    fig.add_trace(go.Scatter(x=data.index, y=(1+data['Strat_Ret']).cumprod()*data['Close'].iloc[0], name="Strategy Equity", line=dict(color='#00ffcc')))
-    fig.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-    st.plotly_chart(fig, use_container_width=True)
+    # --- TAB 3: RISK REPORT ---
+    with tab3:
+        st.subheader("Historical Risk & Return Profile")
+        st.dataframe(calculate_metrics(data), use_container_width=True)
+        
+        st.subheader("Anomaly Detection (Z-Score)")
+        data['Z'] = (data['Close'].pct_change() - data['Close'].pct_change().mean()) / data['Close'].pct_change().std()
+        anomalies = data[data['Z'].abs() > 3]
+        st.write(f"Detected **{len(anomalies)}** extreme events (3rd standard deviation) in the last 15 years.")
 
 else:
-    st.warning("Please enter a valid Yahoo Finance ticker (e.g., TATASTEEL.NS)")
+    st.error("Data fetch failed. Please check your internet or ticker.")
