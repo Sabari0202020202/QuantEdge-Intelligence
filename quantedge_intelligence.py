@@ -14,140 +14,127 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-# --- CONFIG & LIGHT THEME UI ---
+# --- LIGHT THEME UI ---
 st.set_page_config(page_title="QuantPro Valuation", layout="wide")
-
 st.markdown("""
     <style>
-    /* Main Background */
-    .stApp { 
-        background-color: #f8fafc; 
-        color: #1e293b; 
-    }
-    
-    /* Metric Boxes */
-    [data-testid="stMetricValue"] { 
-        color: #1e3a8a !important; 
-        font-weight: 800; 
-    }
+    .stApp { background-color: #f8fafc; color: #1e293b; }
+    [data-testid="stMetricValue"] { color: #1e3a8a !important; font-weight: 800; }
     [data-testid="metric-container"] { 
-        background-color: #ffffff; 
-        border: 1px solid #e2e8f0; 
-        border-radius: 12px; 
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        background-color: #ffffff; border: 1px solid #e2e8f0; 
+        border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
-    
-    /* Valuation Cards */
     .valuation-card { 
-        padding: 20px; 
-        border-radius: 12px; 
-        background-color: #ffffff; 
-        border: 1px solid #e2e8f0;
-        border-top: 4px solid #2563eb; 
-        margin-bottom: 15px;
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        padding: 20px; border-radius: 12px; background-color: #ffffff; 
+        border: 1px solid #e2e8f0; border-top: 4px solid #2563eb; 
+        margin-bottom: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.07);
     }
-    
-    h1, h2, h3 { color: #1e3a8a !important; font-weight: 700; }
-    
-    .status-undervalued { color: #16a34a; font-weight: bold; } /* Professional Green */
-    .status-overvalued { color: #dc2626; font-weight: bold; }  /* Professional Red */
-    
-    /* Sidebar */
-    section[data-testid="stSidebar"] {
-        background-color: #ffffff;
-        border-right: 1px solid #e2e8f0;
-    }
+    .status-undervalued { color: #16a34a; font-weight: bold; }
+    .status-overvalued { color: #dc2626; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- ASSET UNIVERSE ---
-INDIAN_STOCKS = {
-    "RELIANCE.NS": "Reliance Industries", "TCS.NS": "TCS", "HDFCBANK.NS": "HDFC Bank",
-    "INFY.NS": "Infosys", "ICICIBANK.NS": "ICICI Bank", "SBIN.NS": "SBI",
-    "BHARTIARTL.NS": "Bharti Airtel", "ITC.NS": "ITC", "HINDUNILVR.NS": "HUL"
-}
-
+# --- RESILIENT DATA ENGINE ---
 @st.cache_data
 def get_unified_data(ticker, lookback_yrs):
-    start_date_req = datetime.now() - timedelta(days=lookback_yrs*365)
+    # Buffer to ensure we have enough data for moving averages/correlations
+    start_date_req = datetime.now() - timedelta(days=lookback_yrs*365 + 50) 
     assets = [ticker, "^NSEI", "^NSEBANK", "NIFTY_IT.NS"]
-    df = yf.download(assets, start="2000-01-01")['Close']
-    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-    first_date = df[ticker].first_valid_index()
-    actual_start = max(first_date, pd.to_datetime(start_date_req))
-    return df.loc[actual_start:].ffill(), first_date
+    
+    # Download with error handling
+    try:
+        raw_df = yf.download(assets, start=start_date_req.strftime('%Y-%m-%d'))['Close']
+        if isinstance(raw_df.columns, pd.MultiIndex):
+            raw_df.columns = raw_df.columns.get_level_values(1)
+        
+        # Clean data: Remove rows where the target stock is missing
+        df = raw_df.dropna(subset=[ticker])
+        first_valid = df.index[0]
+        
+        return df.ffill(), first_valid
+    except Exception as e:
+        st.error(f"Data Fetch Error: {e}")
+        return None, None
 
-# --- HEADER & CONTROLS ---
+# --- UI CONTROLS ---
 st.title("🏦 Strategic Equity Valuation")
 
 c1, c2, c3 = st.columns([2, 1, 1])
 with c1:
-    sel_stock = st.selectbox("Company", options=list(INDIAN_STOCKS.keys()), 
-                             format_func=lambda x: f"{INDIAN_STOCKS[x]} ({x})")
+    sel_stock = st.selectbox("Select Company", ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "SBIN.NS", "ICICIBANK.NS", "TATAMOTORS.NS"])
 with c2:
-    lookback = st.slider("Timeframe (Years)", 1, 20, 5)
+    lookback = st.slider("Timeframe (Years)", 1, 10, 3) # Defaulted to 3
 with c3:
     rf_rate = st.number_input("Risk Free Rate %", value=7.1) / 100
 
 data, list_date = get_unified_data(sel_stock, lookback)
 
-if list_date > (datetime.now() - timedelta(days=lookback*365)):
-    st.info(f"ℹ️ **System Note:** Asset listed on **{list_date.date()}**. Data adjusted to inception.")
+if data is not None and len(data) > 20: # Ensure at least a month of data exists
+    # --- CALCULATION CORE ---
+    returns = data.pct_change().dropna()
+    
+    # Annualization factor (252 days)
+    actual_ann_ret = returns[sel_stock].mean() * 252
+    actual_ann_vol = returns[sel_stock].std() * np.sqrt(252)
 
-# --- CALCULATIONS ---
-returns = data.pct_change().dropna()
-actual_ann_ret = returns[sel_stock].mean() * 252
-actual_ann_vol = returns[sel_stock].std() * np.sqrt(252)
+    # Beta Calculation (Market Sensitivity)
+    cov = returns.cov() * 252
+    mkt_var = returns['^NSEI'].var() * 252
+    beta = cov.loc[sel_stock, '^NSEI'] / mkt_var
+    mkt_ret = returns['^NSEI'].mean() * 252
 
-# CAPM
-covariance = returns.cov() * 252
-market_var = returns['^NSEI'].var() * 252
-beta = covariance.loc[sel_stock, '^NSEI'] / market_var
-mkt_ret = returns['^NSEI'].mean() * 252
-capm_exp = rf_rate + beta * (mkt_ret - rf_rate)
+    # Models
+    capm_exp = rf_rate + beta * (mkt_ret - rf_rate)
+    
+    # Factor correlation betas (Resilient to small samples)
+    corr = returns.corr()
+    b_mkt = corr.loc[sel_stock, '^NSEI']
+    b_bank = corr.loc[sel_stock, '^NSEBANK']
+    b_it = corr.loc[sel_stock, 'NIFTY_IT.NS']
+    
+    # Logic: Risk Free + (Factor Beta * Factor Premium)
+    # Using normalized premiums for Indian context
+    ff_exp = rf_rate + (b_mkt * 0.08) + (b_bank * 0.02) + (b_it * 0.03)
+    apt_exp = rf_rate + (b_mkt * 0.07) + (b_bank * 0.05)
 
-# Multi-Factor Proxies
-corr_matrix = returns.corr()
-b_mkt, b_bank, b_it = corr_matrix.loc[sel_stock, ['^NSEI', '^NSEBANK', 'NIFTY_IT.NS']]
-four_factor_exp = rf_rate + (b_mkt * 0.08) + (b_bank * 0.02) + (b_it * 0.03)
-apt_exp = rf_rate + (b_mkt * 0.07) + (b_bank * 0.05)
+    # --- DISPLAY ---
+    col_left, col_right = st.columns([2, 1])
+    
+    with col_left:
+        st.subheader("Performance vs Nifty 50")
+        cum_ret = (1 + returns).cumprod()
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret[sel_stock], name="Stock", line=dict(color='#2563eb', width=3)))
+        fig.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret['^NSEI'], name="Nifty 50", line=dict(color='#94a3b8', dash='dot')))
+        fig.update_layout(template="plotly_white", margin=dict(l=0,r=0,t=20,b=0), height=400)
+        st.plotly_chart(fig, use_container_width=True)
 
-# --- DASHBOARD ---
-col_main, col_side = st.columns([2, 1])
+    with col_right:
+        st.subheader("Key Stats")
+        st.metric("Total Return (Period)", f"{(cum_ret[sel_stock].iloc[-1]-1):.2%}")
+        st.metric("Annualized Vol", f"{actual_ann_vol:.2%}")
+        st.metric("Beta (Systematic Risk)", f"{beta:.2f}")
 
-with col_main:
-    st.subheader("Performance vs Nifty 50")
-    cum_returns = (1 + returns).cumprod()
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=cum_returns.index, y=cum_returns[sel_stock], name=sel_stock, line=dict(color='#2563eb', width=3)))
-    fig.add_trace(go.Scatter(x=cum_returns.index, y=cum_returns['^NSEI'], name="Nifty 50", line=dict(color='#94a3b8', dash='dot')))
-    fig.update_layout(template="plotly_white", height=400, margin=dict(l=0,r=0,t=20,b=0))
-    st.plotly_chart(fig, use_container_width=True)
+    st.divider()
+    st.subheader("Valuation Verdicts")
+    v1, v2, v3 = st.columns(3)
 
-with col_side:
-    st.subheader("Risk Metrics")
-    st.metric("Annual Return", f"{actual_ann_ret:.2%}")
-    st.metric("Volatility", f"{actual_ann_vol:.2%}")
-    st.metric("Beta", f"{beta:.2f}")
+    def draw_card(title, exp, actual):
+        alpha = actual - exp
+        v_text = "UNDERVALUED" if alpha > 0 else "OVERVALUED"
+        v_class = "status-undervalued" if alpha > 0 else "status-overvalued"
+        st.markdown(f"""
+            <div class="valuation-card">
+                <div style='color:#64748b; font-size:0.8rem;'>{title}</div>
+                <div style='font-size:1.6rem; font-weight:700;'>{exp:.2%}</div>
+                <div style='font-size:1rem;'>Alpha: <span class='{v_class}'>{alpha:+.2%}</span></div>
+                <div class='{v_class}' style='margin-top:10px; border-top:1px solid #eee; padding-top:10px;'>{v_text}</div>
+            </div>
+        """, unsafe_allow_html=True)
 
-st.divider()
-st.subheader("Model-Based Valuation Verdicts")
-v1, v2, v3 = st.columns(3)
+    with v1: draw_card("CAPM Expected Return", capm_exp, actual_ann_ret)
+    with v2: draw_card("FF 4-Factor (Synthetic)", ff_exp, actual_ann_ret)
+    with v3: draw_card("APT Factor Model", apt_exp, actual_ann_ret)
 
-def get_verdict_card(name, expected, actual):
-    alpha = actual - expected
-    verdict = "UNDERVALUED" if alpha > 0 else "OVERVALUED"
-    v_class = "status-undervalued" if alpha > 0 else "status-overvalued"
-    return f"""
-        <div class="valuation-card">
-            <div style='color:#64748b; font-size: 0.9rem; text-transform: uppercase;'>{name}</div>
-            <div style='font-size: 1.5rem; font-weight: 700; margin: 10px 0;'>Exp: {expected:.2%}</div>
-            <div style='font-size: 1.1rem;'>Alpha: <span class='{v_class}'>{alpha:+.2%}</span></div>
-            <div style='margin-top: 10px; font-weight: 800; border-top: 1px solid #f1f5f9; padding-top: 10px;' class='{v_class}'>{verdict}</div>
-        </div>
-    """
-
-with v1: st.markdown(get_verdict_card("CAPM Standard", capm_exp, actual_ann_ret), unsafe_allow_html=True)
-with v2: st.markdown(get_verdict_card("Synthetic 4-Factor", four_factor_exp, actual_ann_ret), unsafe_allow_html=True)
-with v3: st.markdown(get_verdict_card("APT Factor Model", apt_exp, actual_ann_ret), unsafe_allow_html=True)
+else:
+    st.warning("Insufficient data for the selected timeframe. Try increasing the years or selecting a different stock.")
