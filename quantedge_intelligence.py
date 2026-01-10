@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # --- LIGHT THEME UI ---
-st.set_page_config(page_title="QuantPro Valuation", layout="wide")
+st.set_page_config(page_title="QuantPro Advisor", layout="wide")
 st.markdown("""
     <style>
     .stApp { background-color: #f8fafc; color: #1e293b; }
@@ -35,211 +35,117 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- STABLE DATA ENGINE ---
+# --- ASSET UNIVERSE ---
+STOCKS = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "SBIN.NS", "ICICIBANK.NS", "TATAMOTORS.NS"]
+
+# --- SIDEBAR CONTROLS ---
+st.sidebar.title("🛠️ Settings")
+sel_stock = st.sidebar.selectbox("Select Asset", STOCKS)
+lookback = st.sidebar.slider("Timeframe (Years)", 1, 15, 5)
+rf_rate = st.sidebar.number_input("Risk Free Rate %", value=7.1) / 100
+
+# --- DATA ENGINE ---
 @st.cache_data
-def get_clean_data(ticker, lookback_yrs):
-    # Buffer to ensure we have enough data for returns/momentum
-    start_req = datetime.now() - timedelta(days=lookback_yrs*365 + 30) 
-    assets = [ticker, "^NSEI", "^NSEBANK"]
-    
-    try:
-        # Download and fix multi-index columns immediately
-        raw_df = yf.download(assets, start=start_req.strftime('%Y-%m-%d'), progress=False)['Close']
-        if isinstance(raw_df.columns, pd.MultiIndex):
-            raw_df.columns = raw_df.columns.get_level_values(1)
+def get_full_data(ticker, yrs):
+    start = datetime.now() - timedelta(days=yrs*365 + 300) # Extra buffer for 200MA
+    df = yf.download([ticker, "^NSEI", "^NSEBANK"], start=start.strftime('%Y-%m-%d'))['Close']
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(1)
+    df = df.dropna(subset=[ticker]).ffill()
+    return df, df.index[0]
+
+data, listing_date = get_full_data(sel_stock, lookback)
+
+if data is not None:
+    # INITIALIZE TABS FIRST
+    tab1, tab2 = st.tabs(["💎 Valuation & Market", "🏗️ Structural Strength"])
+
+    # --- TAB 1: VALUATION ENGINE ---
+    with tab1:
+        st.title(f"Valuation: {sel_stock}")
+        returns = data.pct_change().dropna()
+        avg_ret = returns[sel_stock].mean() * 252
         
-        # Ensure we only work with dates where the main stock exists
-        df = raw_df.dropna(subset=[ticker]).ffill()
-        first_valid = df.index[0]
-        return df, first_valid
-    except Exception as e:
-        return None, None
+        # CAPM / Beta
+        beta = (returns.cov().loc[sel_stock, "^NSEI"] * 252) / (returns["^NSEI"].var() * 252)
+        mkt_ret = returns["^NSEI"].mean() * 252
+        capm_exp = rf_rate + beta * (mkt_ret - rf_rate)
+        
+        # Display Metrics
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Avg Annual Return", f"{avg_ret:.2%}")
+        m2.metric("Market Beta", f"{beta:.2f}")
+        m3.metric("Exp. Return (CAPM)", f"{capm_exp:.2%}")
 
-# --- UI CONTROLS ---
-st.title("🏦 Strategic Equity Valuation")
-
-c1, c2, c3 = st.columns([2, 1, 1])
-with c1:
-    # Searchable dropdown
-    sel_stock = st.selectbox("Search & Select Company", 
-                             ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "SBIN.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "BAJFINANCE.NS", "TITAN.NS"])
-with c2:
-    lookback = st.slider("Timeframe (Years)", 1, 15, 3)
-with c3:
-    rf_rate = st.number_input("Risk Free Rate %", value=7.1) / 100
-
-data, list_date = get_clean_data(sel_stock, lookback)
-
-if data is not None and len(data) > 10:
-    # --- CALCULATIONS ---
-    returns = data.pct_change().dropna()
-    
-    # 1. Basic Performance Metrics
-    avg_annual_ret = returns[sel_stock].mean() * 252
-    ann_vol = returns[sel_stock].std() * np.sqrt(252)
-    
-    # 2. CAPM Logic
-    cov_mat = returns.cov() * 252
-    mkt_var = returns['^NSEI'].var() * 252
-    beta = cov_mat.loc[sel_stock, '^NSEI'] / mkt_var
-    mkt_ann_ret = returns['^NSEI'].mean() * 252
-    capm_exp = rf_rate + beta * (mkt_ann_ret - rf_rate)
-
-    # 3. Factor Proxies (Robust for short term)
-    # Using Internal Momentum (1-year return) as the 4th factor proxy
-    stock_momentum = (data[sel_stock].pct_change(min(252, len(data)-1)).iloc[-1])
-    # Sensitivity to BankNifty as a proxy for 'Size/Financial' risk
-    beta_bank = (returns[sel_stock].rolling(len(returns)).corr(returns['^NSEBANK'])).iloc[-1]
-    
-    # Expected Returns Models
-    ff_exp = rf_rate + (beta * 0.08) + (beta_bank * 0.03) + (stock_momentum * 0.05)
-    apt_exp = rf_rate + (beta * 0.09) + (beta_bank * 0.04)
-
-    # --- DASHBOARD DISPLAY ---
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Avg Annualized Return", f"{avg_annual_ret:.2%}")
-    m2.metric("Annualized Volatility", f"{ann_vol:.2%}")
-    m3.metric("Stock Beta", f"{beta:.2f}")
-
-    st.divider()
-    col_l, col_r = st.columns([2, 1])
-
-    with col_l:
-        st.subheader("Cumulative Growth vs Market")
+        # Performance Graph
         cum_ret = (1 + returns).cumprod()
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret[sel_stock], name="Stock", line=dict(color='#2563eb', width=3)))
         fig.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret['^NSEI'], name="Nifty 50", line=dict(color='#94a3b8', dash='dot')))
-        fig.update_layout(template="plotly_white", margin=dict(l=0,r=0,t=10,b=0), height=400)
+        fig.update_layout(template="plotly_white", height=400)
         st.plotly_chart(fig, use_container_width=True)
 
-    with col_r:
-        st.subheader("Valuation Verdicts")
+    # --- TAB 2: TECHNICAL DNA ---
+    with tab2:
+        st.title(f"Price Structure: {sel_stock}")
         
-        def display_valuation(title, expected, actual):
-            alpha = actual - expected
-            v_text = "UNDERVALUED" if alpha > 0 else "OVERVALUED"
-            v_color = "status-undervalued" if alpha > 0 else "status-overvalued"
-            st.markdown(f"""
-                <div class="valuation-card">
-                    <div style='color:#64748b; font-size:0.75rem; text-transform:uppercase;'>{title}</div>
-                    <div style='font-size:1.4rem; font-weight:700;'>{expected:.2%}</div>
-                    <div style='font-size:0.95rem;'>Alpha: <span class='{v_color}'>{alpha:+.2%}</span></div>
-                    <div class='{v_color}' style='margin-top:10px; border-top:1px solid #f1f5f9; padding-top:10px;'>{v_text}</div>
-                </div>
-            """, unsafe_allow_html=True)
+        # Calculations
+        data['MA50'] = data[sel_stock].rolling(50).mean()
+        data['MA200'] = data[sel_stock].rolling(200).mean()
+        last_price = data[sel_stock].iloc[-1]
+        
+        # A. TREND FILTER
+        st.subheader("1. The Institutional Filter (Moving Averages)")
+        c1, c2, c3 = st.columns(3)
+        
+        with c1:
+            status = "✅ BULLISH" if last_price > data['MA200'].iloc[-1] else "❌ BEARISH"
+            st.metric("Trend vs 200-Day MA", status)
+        with c2:
+            is_golden = data['MA50'].iloc[-1] > data['MA200'].iloc[-1]
+            st.metric("50/200 MA Cross", "🔥 GOLDEN" if is_golden else "❄️ DEATH")
+        with c3:
+            dist_high = (last_price / data[sel_stock].max()) - 1
+            st.metric("Near 52-Wk High", f"{dist_high:.2%}")
 
-        display_valuation("CAPM Standard", capm_exp, avg_annual_ret)
-        display_valuation("4-Factor Model", ff_exp, avg_annual_ret)
-        display_valuation("APT Model", apt_exp, avg_annual_ret)
+        # B. SUPPORT & RESISTANCE
+        st.subheader("2. Price Memory (S/R Levels)")
+        res = data[sel_stock].tail(20).max()
+        supp = data[sel_stock].tail(20).min()
+        
+        fig_tech = go.Figure()
+        fig_tech.add_trace(go.Scatter(x=data.tail(300).index, y=data[sel_stock].tail(300), name="Price", line=dict(color='#1e3a8a')))
+        fig_tech.add_trace(go.Scatter(x=data.tail(300).index, y=data['MA200'].tail(300), name="200 MA", line=dict(color='#dc2626')))
+        fig_tech.add_hline(y=res, line_dash="dash", line_color="green", annotation_text="Resistance")
+        fig_tech.add_hline(y=supp, line_dash="dash", line_color="red", annotation_text="Support")
+        fig_tech.update_layout(template="plotly_white", height=450)
+        st.plotly_chart(fig_tech, use_container_width=True)
+        
 
-    # Note for Listing Date
-    if list_date > (datetime.now() - timedelta(days=lookback*365)):
-        st.caption(f"⚠️ *Note: Analysis timeframe limited to inception date ({list_date.date()})*")
+        # C. RELATIVE STRENGTH
+        st.subheader("3. Relative Strength vs Nifty")
+        stock_30 = (data[sel_stock].iloc[-1] / data[sel_stock].iloc[-22]) - 1
+        nifty_30 = (data['^NSEI'].iloc[-1] / data['^NSEI'].iloc[-22]) - 1
+        rs = stock_30 - nifty_30
+        
+        if rs > 0:
+            st.success(f"💪 Stock is OUTPERFORMING the market by {rs:.2%} over the last 22 days.")
+        else:
+            st.error(f"⚠️ Stock is UNDERPERFORMING the market by {rs:.2%} over the last 22 days.")
+
+        # D. VOLATILITY/DRAWDOWN
+        st.subheader("4. Volatility & Risk of Ruin")
+        rolling_max = data[sel_stock].cummax()
+        drawdown = (data[sel_stock] - rolling_max) / rolling_max
+        max_dd = drawdown.min()
+        
+        st.metric("Historical Max Drawdown", f"{max_dd:.2%}")
+        
+        if abs(max_dd) > 0.30:
+            st.warning("Brutal Volatility: This stock is prone to sharp, painful corrections.")
 
 else:
-    st.error("🚨 Data Retrieval Error: Please ensure you are connected to the internet and using a valid NSE ticker.")
-
-# --- CONTINUATION OF CODE: TAB 2 ---
-with tab2:
-    st.header("🏗️ Structural Strength & Technical DNA")
-    
-    # 1. DATA PREP FOR TECH ANALYSIS
-    # We need a longer lookback for the 200-day MA regardless of the user's slider
-    tech_data = yf.download([sel_stock, "^NSEI"], start=(datetime.now() - timedelta(days=730)))['Close']
-    if isinstance(tech_data.columns, pd.MultiIndex):
-        tech_data.columns = tech_data.columns.get_level_values(1)
-    tech_data = tech_data.ffill()
-
-    # Calculations
-    tech_data['MA50'] = tech_data[sel_stock].rolling(window=50).mean()
-    tech_data['MA200'] = tech_data[sel_stock].rolling(window=200).mean()
-    
-    last_close = tech_data[sel_stock].iloc[-1]
-    ma50 = tech_data['MA50'].iloc[-1]
-    ma200 = tech_data['MA200'].iloc[-1]
-    
-    # --- SECTION 1: THE TREND FILTER ---
-    st.subheader("1. Moving Averages: The Institutional Filter")
-    t1, t2, t3 = st.columns(3)
-    
-    # Trend Logic
-    is_above_200 = last_close > ma200
-    is_golden_cross = ma50 > ma200
-    
-    with t1:
-        status = "✅ ABOVE" if is_above_200 else "❌ BELOW"
-        st.metric("Price vs 200-Day MA", status, delta=f"{((last_close/ma200)-1):.2%} vs MA")
-        st.caption("Institutional line in the sand. Below 200MA = Falling Knife territory.")
-
-    with t2:
-        cross_status = "🔥 GOLDEN" if is_golden_cross else "❄️ DEATH"
-        st.metric("50/200 Day Alignment", f"{cross_status} CROSS")
-        st.caption("Golden Cross indicates long-term momentum is in your favor.")
-
-    with t3:
-        dist_52h = (last_close / tech_data[sel_stock].max()) - 1
-        st.metric("Dist. from 52-Wk High", f"{dist_52h:.2%}")
-        st.caption("Strong stocks usually stay within 15% of their highs.")
-
-    # --- SECTION 2: PRICE MEMORY (Support & Resistance) ---
-    st.subheader("2. Price Memory: Support & Resistance")
-    
-    # Simple algorithm to find pivot points
-    def find_levels(df, window=20):
-        highs = df[sel_stock].rolling(window=window).max()
-        lows = df[sel_stock].rolling(window=window).min()
-        return highs.iloc[-1], lows.iloc[-1]
-    
-    resistance, support = find_levels(tech_data)
-    
-    # Plotting the Chart
-    fig_tech = go.Figure()
-    fig_tech.add_trace(go.Scatter(x=tech_data.index, y=tech_data[sel_stock], name="Close Price", line=dict(color='#1e3a8a')))
-    fig_tech.add_trace(go.Scatter(x=tech_data.index, y=tech_data['MA50'], name="50-Day MA", line=dict(color='#f59e0b', dash='dot')))
-    fig_tech.add_trace(go.Scatter(x=tech_data.index, y=tech_data['MA200'], name="200-Day MA", line=dict(color='#dc2626', width=2)))
-    
-    # Visualizing Support/Resistance
-    fig_tech.add_hline(y=resistance, line_dash="dash", line_color="green", annotation_text="Resis (20D)")
-    fig_tech.add_hline(y=support, line_dash="dash", line_color="red", annotation_text="Supp (20D)")
-    
-    fig_tech.update_layout(template="plotly_white", height=500, title=f"Trend & Structure: {sel_stock}")
-    st.plotly_chart(fig_tech, use_container_width=True)
-    
-
-    # --- SECTION 3: RELATIVE STRENGTH & VOLATILITY ---
-    st.divider()
-    st.subheader("3. Relative Strength & 4. Volatility DNA")
-    
-    c_rs, c_vol = st.columns(2)
-    
-    with c_rs:
-        st.write("**Price vs Market (Last 30 Days)**")
-        # Relative Strength calculation: Stock Ret - Market Ret
-        stock_30d = (tech_data[sel_stock].iloc[-1] / tech_data[sel_stock].iloc[-22]) - 1
-        nifty_30d = (tech_data['^NSEI'].iloc[-1] / tech_data['^NSEI'].iloc[-22]) - 1
-        rel_strength = stock_30d - nifty_30d
-        
-        if rel_strength > 0:
-            st.success(f"💪 Outperforming Nifty 50 by {rel_strength:.2%}")
-        else:
-            st.error(f"⚠️ Underperforming Nifty 50 by {rel_strength:.2%}")
-        st.caption("Relative Strength shows where big money is hiding during market stress.")
-
-    with c_vol:
-        st.write("**Drawdown & Volatility Profile**")
-        # Max Drawdown in last 1 year
-        one_year = tech_data[sel_stock].tail(252)
-        rolling_max = one_year.cummax()
-        drawdowns = (one_year - rolling_max) / rolling_max
-        max_dd = drawdowns.min()
-        
-        st.metric("Max 1-Year Drawdown", f"{max_dd:.2%}")
-        if abs(max_dd) > 0.25:
-            st.warning("High Volatility: This stock experiences 'deep' corrections.")
-        else:
-            st.info("Stable Structure: Stock holds value well during dips.")
-
+    st.error("Could not fetch data.")
 
 
 
