@@ -14,70 +14,88 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-# --- CONFIG & UI ---
+# --- CONFIG & LIGHT THEME UI ---
 st.set_page_config(page_title="QuantPro Valuation", layout="wide")
+
 st.markdown("""
     <style>
-    .stApp { background-color: #050a14; color: #ffffff; }
-    [data-testid="stMetricValue"] { color: #ffffff !important; font-weight: 800; }
-    [data-testid="metric-container"] { background-color: #111827; border: 1px solid #3b82f6; border-radius: 10px; }
-    .valuation-card { 
-        padding: 15px; border-radius: 10px; background-color: #161e31; 
-        border-left: 5px solid #3b82f6; margin-bottom: 15px;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.5);
+    /* Main Background */
+    .stApp { 
+        background-color: #f8fafc; 
+        color: #1e293b; 
     }
-    .status-undervalued { color: #00ffcc; font-weight: bold; }
-    .status-overvalued { color: #ff4b4b; font-weight: bold; }
+    
+    /* Metric Boxes */
+    [data-testid="stMetricValue"] { 
+        color: #1e3a8a !important; 
+        font-weight: 800; 
+    }
+    [data-testid="metric-container"] { 
+        background-color: #ffffff; 
+        border: 1px solid #e2e8f0; 
+        border-radius: 12px; 
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* Valuation Cards */
+    .valuation-card { 
+        padding: 20px; 
+        border-radius: 12px; 
+        background-color: #ffffff; 
+        border: 1px solid #e2e8f0;
+        border-top: 4px solid #2563eb; 
+        margin-bottom: 15px;
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    }
+    
+    h1, h2, h3 { color: #1e3a8a !important; font-weight: 700; }
+    
+    .status-undervalued { color: #16a34a; font-weight: bold; } /* Professional Green */
+    .status-overvalued { color: #dc2626; font-weight: bold; }  /* Professional Red */
+    
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #e2e8f0;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- ASSET UNIVERSE (INDIAN STOCKS) ---
+# --- ASSET UNIVERSE ---
 INDIAN_STOCKS = {
     "RELIANCE.NS": "Reliance Industries", "TCS.NS": "TCS", "HDFCBANK.NS": "HDFC Bank",
     "INFY.NS": "Infosys", "ICICIBANK.NS": "ICICI Bank", "SBIN.NS": "SBI",
-    "BHARTIARTL.NS": "Bharti Airtel", "ITC.NS": "ITC", "HINDUNILVR.NS": "HUL",
-    "TATAMOTORS.NS": "Tata Motors", "BAJFINANCE.NS": "Bajaj Finance", "WIPRO.NS": "Wipro",
-    "ADANIENT.NS": "Adani Enterprises", "SUNPHARMA.NS": "Sun Pharma", "TITAN.NS": "Titan"
+    "BHARTIARTL.NS": "Bharti Airtel", "ITC.NS": "ITC", "HINDUNILVR.NS": "HUL"
 }
 
-# --- DATA ENGINE ---
 @st.cache_data
 def get_unified_data(ticker, lookback_yrs):
     start_date_req = datetime.now() - timedelta(days=lookback_yrs*365)
-    # Fetching Stock, Market, and Factor Proxies
     assets = [ticker, "^NSEI", "^NSEBANK", "NIFTY_IT.NS"]
     df = yf.download(assets, start="2000-01-01")['Close']
     df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-    
-    # 1. Listing Date Logic
     first_date = df[ticker].first_valid_index()
-    
-    # Use the later of (Requested Start Date) or (Actual Listing Date)
     actual_start = max(first_date, pd.to_datetime(start_date_req))
-    df_filtered = df.loc[actual_start:].ffill()
-    
-    return df_filtered, first_date
+    return df.loc[actual_start:].ffill(), first_date
 
-# --- HEADER & GLOBAL CONTROLS ---
-st.title("🏛️ Strategic Valuation & Performance Dashboard")
+# --- HEADER & CONTROLS ---
+st.title("🏦 Strategic Equity Valuation")
 
-# Top Row Controls
 c1, c2, c3 = st.columns([2, 1, 1])
 with c1:
-    sel_stock = st.selectbox("Select Asset", options=list(INDIAN_STOCKS.keys()), 
+    sel_stock = st.selectbox("Company", options=list(INDIAN_STOCKS.keys()), 
                              format_func=lambda x: f"{INDIAN_STOCKS[x]} ({x})")
 with c2:
     lookback = st.slider("Timeframe (Years)", 1, 20, 5)
 with c3:
-    rf_rate = st.number_input("Risk Free Rate % (e.g. 10yr G-Sec)", value=7.1) / 100
+    rf_rate = st.number_input("Risk Free Rate %", value=7.1) / 100
 
 data, list_date = get_unified_data(sel_stock, lookback)
 
-# --- LISTING NOTE ---
 if list_date > (datetime.now() - timedelta(days=lookback*365)):
-    st.info(f"💡 **Note:** Analysis timeframe adjusted to listing date: **{list_date.date()}**")
+    st.info(f"ℹ️ **System Note:** Asset listed on **{list_date.date()}**. Data adjusted to inception.")
 
-# --- CALCULATIONS ENGINE ---
+# --- CALCULATIONS ---
 returns = data.pct_change().dropna()
 actual_ann_ret = returns[sel_stock].mean() * 252
 actual_ann_vol = returns[sel_stock].std() * np.sqrt(252)
@@ -89,60 +107,47 @@ beta = covariance.loc[sel_stock, '^NSEI'] / market_var
 mkt_ret = returns['^NSEI'].mean() * 252
 capm_exp = rf_rate + beta * (mkt_ret - rf_rate)
 
-# Multi-Factor & APT Proxies
+# Multi-Factor Proxies
 corr_matrix = returns.corr()
-b_mkt = corr_matrix.loc[sel_stock, '^NSEI']
-b_bank = corr_matrix.loc[sel_stock, '^NSEBANK'] # Proxy for Financial Risk/Size
-b_it = corr_matrix.loc[sel_stock, 'NIFTY_IT.NS'] # Proxy for Growth/Momentum factor
-
-# Synthetic Weights for Indian Context
+b_mkt, b_bank, b_it = corr_matrix.loc[sel_stock, ['^NSEI', '^NSEBANK', 'NIFTY_IT.NS']]
 four_factor_exp = rf_rate + (b_mkt * 0.08) + (b_bank * 0.02) + (b_it * 0.03)
 apt_exp = rf_rate + (b_mkt * 0.07) + (b_bank * 0.05)
 
-# --- DASHBOARD LAYOUT (ONE TAB) ---
+# --- DASHBOARD ---
 col_main, col_side = st.columns([2, 1])
 
 with col_main:
-    # 1. Performance Comparison Graph
-    st.subheader("📈 Performance Benchmarking (Cumulative)")
+    st.subheader("Performance vs Nifty 50")
     cum_returns = (1 + returns).cumprod()
-    
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=cum_returns.index, y=cum_returns[sel_stock], name=sel_stock, line=dict(color='#3b82f6', width=3)))
-    fig.add_trace(go.Scatter(x=cum_returns.index, y=cum_returns['^NSEI'], name="Nifty 50 (Market)", line=dict(color='#94a3b8', dash='dot')))
-    fig.update_layout(template="plotly_dark", height=450, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    fig.add_trace(go.Scatter(x=cum_returns.index, y=cum_returns[sel_stock], name=sel_stock, line=dict(color='#2563eb', width=3)))
+    fig.add_trace(go.Scatter(x=cum_returns.index, y=cum_returns['^NSEI'], name="Nifty 50", line=dict(color='#94a3b8', dash='dot')))
+    fig.update_layout(template="plotly_white", height=400, margin=dict(l=0,r=0,t=20,b=0))
     st.plotly_chart(fig, use_container_width=True)
 
 with col_side:
-    # 2. Risk/Return Summary
-    st.subheader("⚡ Risk-Return Profile")
-    st.metric("Annualized Return", f"{actual_ann_ret:.2%}")
-    st.metric("Annualized Volatility", f"{actual_ann_vol:.2%}")
-    st.metric("Systematic Risk (Beta)", f"{beta:.2f}")
+    st.subheader("Risk Metrics")
+    st.metric("Annual Return", f"{actual_ann_ret:.2%}")
+    st.metric("Volatility", f"{actual_ann_vol:.2%}")
+    st.metric("Beta", f"{beta:.2f}")
 
 st.divider()
-
-# 3. VALUATION MODELS SECTION
-st.subheader("💎 Fair Value Multi-Model Assessment")
+st.subheader("Model-Based Valuation Verdicts")
 v1, v2, v3 = st.columns(3)
 
-def get_verdict_html(name, expected, actual):
+def get_verdict_card(name, expected, actual):
     alpha = actual - expected
     verdict = "UNDERVALUED" if alpha > 0 else "OVERVALUED"
     v_class = "status-undervalued" if alpha > 0 else "status-overvalued"
     return f"""
         <div class="valuation-card">
-            <small style='color:#94a3b8'>{name}</small>
-            <h3 style='margin:10px 0;'>Exp. Return: {expected:.2%}</h3>
-            <p style='margin:0;'>Alpha: <span class='{v_class}'>{alpha:+.2%}</span></p>
-            <p style='margin:0;'>Verdict: <span class='{v_class}'>{verdict}</span></p>
+            <div style='color:#64748b; font-size: 0.9rem; text-transform: uppercase;'>{name}</div>
+            <div style='font-size: 1.5rem; font-weight: 700; margin: 10px 0;'>Exp: {expected:.2%}</div>
+            <div style='font-size: 1.1rem;'>Alpha: <span class='{v_class}'>{alpha:+.2%}</span></div>
+            <div style='margin-top: 10px; font-weight: 800; border-top: 1px solid #f1f5f9; padding-top: 10px;' class='{v_class}'>{verdict}</div>
         </div>
     """
 
-with v1:
-    st.markdown(get_verdict_html("CAPM Model", capm_exp, actual_ann_ret), unsafe_allow_html=True)
-with v2:
-    st.markdown(get_verdict_html("4-Factor Model (Synthetic)", four_factor_exp, actual_ann_ret), unsafe_allow_html=True)
-with v3:
-    st.markdown(get_verdict_html("APT Model (Sector-Factor)", apt_exp, actual_ann_ret), unsafe_allow_html=True)
+with v1: st.markdown(get_verdict_card("CAPM Standard", capm_exp, actual_ann_ret), unsafe_allow_html=True)
+with v2: st.markdown(get_verdict_card("Synthetic 4-Factor", four_factor_exp, actual_ann_ret), unsafe_allow_html=True)
+with v3: st.markdown(get_verdict_card("APT Factor Model", apt_exp, actual_ann_ret), unsafe_allow_html=True)
