@@ -139,3 +139,109 @@ if data is not None and len(data) > 10:
 
 else:
     st.error("🚨 Data Retrieval Error: Please ensure you are connected to the internet and using a valid NSE ticker.")
+
+# --- CONTINUATION OF CODE: TAB 2 ---
+with tab2:
+    st.header("🏗️ Structural Strength & Technical DNA")
+    
+    # 1. DATA PREP FOR TECH ANALYSIS
+    # We need a longer lookback for the 200-day MA regardless of the user's slider
+    tech_data = yf.download([sel_stock, "^NSEI"], start=(datetime.now() - timedelta(days=730)))['Close']
+    if isinstance(tech_data.columns, pd.MultiIndex):
+        tech_data.columns = tech_data.columns.get_level_values(1)
+    tech_data = tech_data.ffill()
+
+    # Calculations
+    tech_data['MA50'] = tech_data[sel_stock].rolling(window=50).mean()
+    tech_data['MA200'] = tech_data[sel_stock].rolling(window=200).mean()
+    
+    last_close = tech_data[sel_stock].iloc[-1]
+    ma50 = tech_data['MA50'].iloc[-1]
+    ma200 = tech_data['MA200'].iloc[-1]
+    
+    # --- SECTION 1: THE TREND FILTER ---
+    st.subheader("1. Moving Averages: The Institutional Filter")
+    t1, t2, t3 = st.columns(3)
+    
+    # Trend Logic
+    is_above_200 = last_close > ma200
+    is_golden_cross = ma50 > ma200
+    
+    with t1:
+        status = "✅ ABOVE" if is_above_200 else "❌ BELOW"
+        st.metric("Price vs 200-Day MA", status, delta=f"{((last_close/ma200)-1):.2%} vs MA")
+        st.caption("Institutional line in the sand. Below 200MA = Falling Knife territory.")
+
+    with t2:
+        cross_status = "🔥 GOLDEN" if is_golden_cross else "❄️ DEATH"
+        st.metric("50/200 Day Alignment", f"{cross_status} CROSS")
+        st.caption("Golden Cross indicates long-term momentum is in your favor.")
+
+    with t3:
+        dist_52h = (last_close / tech_data[sel_stock].max()) - 1
+        st.metric("Dist. from 52-Wk High", f"{dist_52h:.2%}")
+        st.caption("Strong stocks usually stay within 15% of their highs.")
+
+    # --- SECTION 2: PRICE MEMORY (Support & Resistance) ---
+    st.subheader("2. Price Memory: Support & Resistance")
+    
+    # Simple algorithm to find pivot points
+    def find_levels(df, window=20):
+        highs = df[sel_stock].rolling(window=window).max()
+        lows = df[sel_stock].rolling(window=window).min()
+        return highs.iloc[-1], lows.iloc[-1]
+    
+    resistance, support = find_levels(tech_data)
+    
+    # Plotting the Chart
+    fig_tech = go.Figure()
+    fig_tech.add_trace(go.Scatter(x=tech_data.index, y=tech_data[sel_stock], name="Close Price", line=dict(color='#1e3a8a')))
+    fig_tech.add_trace(go.Scatter(x=tech_data.index, y=tech_data['MA50'], name="50-Day MA", line=dict(color='#f59e0b', dash='dot')))
+    fig_tech.add_trace(go.Scatter(x=tech_data.index, y=tech_data['MA200'], name="200-Day MA", line=dict(color='#dc2626', width=2)))
+    
+    # Visualizing Support/Resistance
+    fig_tech.add_hline(y=resistance, line_dash="dash", line_color="green", annotation_text="Resis (20D)")
+    fig_tech.add_hline(y=support, line_dash="dash", line_color="red", annotation_text="Supp (20D)")
+    
+    fig_tech.update_layout(template="plotly_white", height=500, title=f"Trend & Structure: {sel_stock}")
+    st.plotly_chart(fig_tech, use_container_width=True)
+    
+
+    # --- SECTION 3: RELATIVE STRENGTH & VOLATILITY ---
+    st.divider()
+    st.subheader("3. Relative Strength & 4. Volatility DNA")
+    
+    c_rs, c_vol = st.columns(2)
+    
+    with c_rs:
+        st.write("**Price vs Market (Last 30 Days)**")
+        # Relative Strength calculation: Stock Ret - Market Ret
+        stock_30d = (tech_data[sel_stock].iloc[-1] / tech_data[sel_stock].iloc[-22]) - 1
+        nifty_30d = (tech_data['^NSEI'].iloc[-1] / tech_data['^NSEI'].iloc[-22]) - 1
+        rel_strength = stock_30d - nifty_30d
+        
+        if rel_strength > 0:
+            st.success(f"💪 Outperforming Nifty 50 by {rel_strength:.2%}")
+        else:
+            st.error(f"⚠️ Underperforming Nifty 50 by {rel_strength:.2%}")
+        st.caption("Relative Strength shows where big money is hiding during market stress.")
+
+    with c_vol:
+        st.write("**Drawdown & Volatility Profile**")
+        # Max Drawdown in last 1 year
+        one_year = tech_data[sel_stock].tail(252)
+        rolling_max = one_year.cummax()
+        drawdowns = (one_year - rolling_max) / rolling_max
+        max_dd = drawdowns.min()
+        
+        st.metric("Max 1-Year Drawdown", f"{max_dd:.2%}")
+        if abs(max_dd) > 0.25:
+            st.warning("High Volatility: This stock experiences 'deep' corrections.")
+        else:
+            st.info("Stable Structure: Stock holds value well during dips.")
+
+
+
+
+
+
