@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 from arch import arch_model
 from datetime import timedelta
 
-# --- THEME & CONFIG ---
+# --- CONFIG & THEME ---
 st.set_page_config(page_title="QuantPro India Forecast", layout="wide")
 
 st.markdown("""
@@ -25,117 +25,129 @@ st.markdown("""
         background-color: #111827; border: 1px solid #3b82f6; border-radius: 12px; 
     }
     h1, h2, h3 { color: #60a5fa !important; border-bottom: 1px solid #1e293b; padding-bottom: 10px; }
-    .stTable { background-color: #0f172a; }
+    .stTable { background-color: #0f172a; border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- STOCK LIST ---
-STOCKS = {"RELIANCE.NS": "Reliance", "TCS.NS": "TCS", "HDFCBANK.NS": "HDFC Bank", "INFY.NS": "Infosys", "SBIN.NS": "SBI"}
+STOCKS = {
+    "RELIANCE.NS": "Reliance", "TCS.NS": "TCS", "HDFCBANK.NS": "HDFC Bank", 
+    "INFY.NS": "Infosys", "SBIN.NS": "SBI", "ICICIBANK.NS": "ICICI Bank",
+    "TATAMOTORS.NS": "Tata Motors", "BAJFINANCE.NS": "Bajaj Finance"
+}
 
 @st.cache_data
 def get_historical(ticker):
-    data = yf.download(ticker, start="2015-01-01")
+    data = yf.download(ticker, start="2010-01-01")
     data.columns = [c[0] if isinstance(c, tuple) else c for c in data.columns]
     return data
 
 # --- MAIN APP ---
-st.title("📈 1-Year Strategic Price Forecast & Playbook")
-sel_stock = st.selectbox("Select Asset", options=list(STOCKS.keys()), format_func=lambda x: STOCKS[x])
+st.title("🏛️ 1-Year Strategic Price Forecast & Signal Analysis")
+sel_stock = st.selectbox("Select Asset to Analyze", options=list(STOCKS.keys()), format_func=lambda x: STOCKS[x])
 hist_data = get_historical(sel_stock)
 
 if hist_data is not None:
-    # --- 1. GARCH VOLATILITY & PRICE PROJECTION ---
+    # --- 1. GARCH(1,1) VOLATILITY FORECAST ---
     returns = 100 * hist_data['Close'].pct_change().dropna()
     model = arch_model(returns, vol='Garch', p=1, q=1)
     res = model.fit(disp="off")
     
-    # Forecast 252 days (1 Trading Year)
     forecast_horizon = 252
     fc = res.forecast(horizon=forecast_horizon)
-    # Annualized Vol from GARCH
+    # Annualized Vol from GARCH variance forecast
     forecast_vol = np.sqrt(fc.variance.values[-1, :]) / 100 
     
-    # Generate Projected Prices (GBM Model)
+    # --- 2. MONTE CARLO PRICE PROJECTION (GBM) ---
     last_price = hist_data['Close'].iloc[-1]
     drift = returns.mean() / 100
-    
-    # Create the time series for forecast
     future_dates = [hist_data.index[-1] + timedelta(days=i) for i in range(1, forecast_horizon + 1)]
-    # Simplified projection: Price * cumulative volatility drift
-    projected_prices = last_price * np.exp(np.cumsum(drift + forecast_vol * np.random.standard_normal(forecast_horizon)))
+    
+    # We use the mean of the GARCH volatility for a stable price projection
+    avg_vol = np.mean(forecast_vol)
+    # Brownian Motion: Last Price * exp(cumulative returns)
+    projected_prices = last_price * np.exp(np.cumsum(drift + avg_vol * np.random.standard_normal(forecast_horizon)))
     
     df_fc = pd.DataFrame({'Close': projected_prices}, index=future_dates)
-    full_series = pd.concat([hist_data[['Close']].tail(100), df_fc])
-
-    # --- TABBED VIEW ---
-    tab_fc, tab_strat = st.tabs(["🔮 1-Year Forecast", "🧪 Strategy Backtest & Signals"])
+    
+    # --- TABS ---
+    tab_fc, tab_strat = st.tabs(["🔮 Volatility-Adjusted Forecast", "🧪 Strategy Signals & Performance"])
 
     with tab_fc:
-        st.subheader(f"1-Year Price Path Projection ({sel_stock})")
+        st.subheader(f"1-Year Price Path Projection: {sel_stock}")
         fig_fc = go.Figure()
-        fig_fc.add_trace(go.Scatter(x=hist_data.tail(100).index, y=hist_data.tail(100)['Close'], name="Actual Price", line=dict(color="gray")))
-        fig_fc.add_trace(go.Scatter(x=df_fc.index, y=df_fc['Close'], name="GARCH Projected", line=dict(color="#3b82f6", width=3)))
-        fig_fc.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        # Historical Path
+        fig_fc.add_trace(go.Scatter(x=hist_data.tail(200).index, y=hist_data.tail(200)['Close'], name="Historical", line=dict(color="gray")))
+        # Projected Path
+        fig_fc.add_trace(go.Scatter(x=df_fc.index, y=df_fc['Close'], name="GARCH Projection", line=dict(color="#3b82f6", width=4)))
+        
+        # Upper/Lower Confidence Bands (Vol Clusters)
+        upper_band = projected_prices * (1 + avg_vol)
+        lower_band = projected_prices * (1 - avg_vol)
+        fig_fc.add_trace(go.Scatter(x=df_fc.index, y=upper_band, line=dict(width=0), showlegend=False))
+        fig_fc.add_trace(go.Scatter(x=df_fc.index, y=lower_band, line=dict(width=0), fill='tonexty', fillcolor='rgba(59, 130, 246, 0.1)', name="Volatility Zone"))
+        
+        fig_fc.update_layout(template="plotly_dark", height=500, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig_fc, use_container_width=True)
-        st.info("The projection above uses GARCH(1,1) volatility clusters to simulate the next 252 days of price movement.")
+        
 
     with tab_strat:
-        # --- 2. STRATEGY ENGINE ---
-        def apply_strat(df):
-            # SMA 20/50
-            df['SMA20'] = df['Close'].rolling(20).mean()
-            df['SMA50'] = df['Close'].rolling(50).mean()
-            df['SMA_Sig'] = np.where(df['SMA20'] > df['SMA50'], 1, 0)
-            
-            # RSI
-            delta = df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-            rs = gain / (loss + 1e-9)
-            df['RSI'] = 100 - (100 / (1 + rs))
-            df['RSI_Sig'] = np.where(df['RSI'] < 30, 1, np.where(df['RSI'] > 70, 0, np.nan))
-            df['RSI_Sig'] = df['RSI_Sig'].ffill().fillna(0)
-            
-            # Golden Cross (50/200) - Using hist + forecast to have enough data
-            df['SMA200'] = df['Close'].rolling(200).mean()
-            df['Golden_Sig'] = np.where(df['SMA50'] > df['SMA200'], 1, 0)
-            
-            return df
-
-        # Combine historical tail with forecast to calculate indicators
-        analysis_df = pd.concat([hist_data[['Close']].tail(250), df_fc]).copy()
-        analysis_df = apply_strat(analysis_df)
-        forecast_results = analysis_df.loc[df_fc.index]
-
-        # Performance Table
-        perf = []
-        for s, name in [('SMA_Sig', 'SMA 20/50'), ('RSI_Sig', 'RSI Tactical'), ('Golden_Sig', 'Golden Cross')]:
-            ret = (forecast_results['Close'].pct_change() * forecast_results[s].shift(1)).sum()
-            trades = forecast_results[s].diff().abs().sum()
-            perf.append({"Strategy": name, "Expected Return": f"{ret:.2%}", "Trades": int(trades)})
+        # --- 3. STRATEGY ENGINE ---
+        # We look at historical + forecast to ensure moving averages are populated
+        full_df = pd.concat([hist_data[['Close']].tail(200), df_fc]).copy()
         
-        st.subheader("Strategy Performance on Forecasted Data")
-        st.table(pd.DataFrame(perf))
+        # SMA 20/50
+        full_df['SMA20'] = full_df['Close'].rolling(20).mean()
+        full_df['SMA50'] = full_df['Close'].rolling(50).mean()
+        full_df['SMA_Sig'] = np.where(full_df['SMA20'] > full_df['SMA50'], 1, 0)
+        
+        # RSI 14
+        delta = full_df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+        rs = gain / (loss + 1e-9)
+        full_df['RSI'] = 100 - (100 / (1 + rs))
+        full_df['RSI_Sig'] = np.where(full_df['RSI'] < 30, 1, np.where(full_df['RSI'] > 70, 0, np.nan))
+        full_df['RSI_Sig'] = full_df['RSI_Sig'].ffill().fillna(0)
+        
+        # Golden Cross (50/200)
+        full_df['SMA200'] = full_df['Close'].rolling(200).mean()
+        full_df['Golden_Sig'] = np.where(full_df['SMA50'] > full_df['SMA200'], 1, 0)
+        
+        # Segment only the Forecasted part for performance metrics
+        fc_analysis = full_df.loc[df_fc.index].copy()
+        fc_analysis['R'] = fc_analysis['Close'].pct_change()
+        
+        perf_data = []
+        for col, name in [('SMA_Sig', 'SMA 20/50'), ('RSI_Sig', 'RSI Tactical'), ('Golden_Sig', 'Golden Cross')]:
+            # Strategy Return = Signal(t-1) * Return(t)
+            strat_ret = (fc_analysis[col].shift(1) * fc_analysis['R']).sum()
+            trades = fc_analysis[col].diff().abs().sum()
+            perf_data.append({"Strategy": name, "Forecasted Return": f"{strat_ret:.2%}", "Trades": int(trades)})
+        
+        st.subheader("Comparative Strategy Performance (Forecasted Year)")
+        st.table(pd.DataFrame(perf_data))
 
-        # --- 3. SIGNAL CHARTS ---
-        st.subheader("Strategy Buy/Sell Visualization")
-        
-        selected_viz = st.selectbox("Select Strategy to Visualize", ["SMA 20/50", "RSI Tactical", "Golden Cross"])
-        
+        # --- 4. SIGNAL VISUALIZATION ---
+        st.subheader("Strategy Entry/Exit Visuals")
+        choice = st.selectbox("Choose Strategy to Inspect", ["SMA 20/50", "RSI Tactical", "Golden Cross"])
+        sig_map = {"SMA 20/50": "SMA_Sig", "RSI Tactical": "RSI_Sig", "Golden Cross": "Golden_Sig"}
+        target_sig = sig_map[choice]
+
         fig_sig = go.Figure()
-        fig_sig.add_trace(go.Scatter(x=forecast_results.index, y=forecast_results['Close'], name="Price", line=dict(color="white", opacity=0.3)))
+        # FIX: Opacity moved outside line dictionary
+        fig_sig.add_trace(go.Scatter(x=fc_analysis.index, y=fc_analysis['Close'], name="Price", line=dict(color="white"), opacity=0.4))
         
-        sig_col = 'SMA_Sig' if selected_viz == "SMA 20/50" else 'RSI_Sig' if selected_viz == "RSI Tactical" else 'Golden_Sig'
+        # Filter for Buy/Sell signals
+        buys = fc_analysis[fc_analysis[target_sig].diff() == 1]
+        sells = fc_analysis[fc_analysis[target_sig].diff() == -1]
         
-        # Buy Signals
-        buys = forecast_results[forecast_results[sig_col].diff() == 1]
-        sells = forecast_results[forecast_results[sig_col].diff() == -1]
+        fig_sig.add_trace(go.Scatter(x=buys.index, y=buys['Close'], mode='markers', name='Buy Signal', marker=dict(symbol='triangle-up', size=14, color='#00ffcc')))
+        fig_sig.add_trace(go.Scatter(x=sells.index, y=sells['Close'], mode='markers', name='Sell Signal', marker=dict(symbol='triangle-down', size=14, color='#ff4b4b')))
         
-        fig_sig.add_trace(go.Scatter(x=buys.index, y=buys['Close'], mode='markers', name='Buy', marker=dict(symbol='triangle-up', size=12, color='#00ff00')))
-        fig_sig.add_trace(go.Scatter(x=sells.index, y=sells['Close'], mode='markers', name='Sell', marker=dict(symbol='triangle-down', size=12, color='#ff0000')))
-        
-        fig_sig.update_layout(template="plotly_dark", title=f"Buy/Sell Entry Points: {selected_viz}")
+        fig_sig.update_layout(template="plotly_dark", height=450, title=f"Buy/Sell Execution Points: {choice}")
         st.plotly_chart(fig_sig, use_container_width=True)
+        
 
 else:
-    st.error("Select a valid stock.")
+    st.error("Error loading data. Check ticker suffix (e.g., .NS for NSE).")
