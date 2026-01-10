@@ -7,6 +7,7 @@ Original file is located at
     https://colab.research.google.com/drive/1gkmpljoOIvjbKUjTAM0G8OCGRZI-inXT
 """
 
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -34,26 +35,24 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- RESILIENT DATA ENGINE ---
+# --- STABLE DATA ENGINE ---
 @st.cache_data
-def get_unified_data(ticker, lookback_yrs):
-    # Buffer to ensure we have enough data for moving averages/correlations
-    start_date_req = datetime.now() - timedelta(days=lookback_yrs*365 + 50) 
-    assets = [ticker, "^NSEI", "^NSEBANK", "NIFTY_IT.NS"]
+def get_clean_data(ticker, lookback_yrs):
+    # Buffer to ensure we have enough data for returns/momentum
+    start_req = datetime.now() - timedelta(days=lookback_yrs*365 + 30) 
+    assets = [ticker, "^NSEI", "^NSEBANK"]
     
-    # Download with error handling
     try:
-        raw_df = yf.download(assets, start=start_date_req.strftime('%Y-%m-%d'))['Close']
+        # Download and fix multi-index columns immediately
+        raw_df = yf.download(assets, start=start_req.strftime('%Y-%m-%d'), progress=False)['Close']
         if isinstance(raw_df.columns, pd.MultiIndex):
             raw_df.columns = raw_df.columns.get_level_values(1)
         
-        # Clean data: Remove rows where the target stock is missing
-        df = raw_df.dropna(subset=[ticker])
+        # Ensure we only work with dates where the main stock exists
+        df = raw_df.dropna(subset=[ticker]).ffill()
         first_valid = df.index[0]
-        
-        return df.ffill(), first_valid
+        return df, first_valid
     except Exception as e:
-        st.error(f"Data Fetch Error: {e}")
         return None, None
 
 # --- UI CONTROLS ---
@@ -61,80 +60,82 @@ st.title("🏦 Strategic Equity Valuation")
 
 c1, c2, c3 = st.columns([2, 1, 1])
 with c1:
-    sel_stock = st.selectbox("Select Company", ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "SBIN.NS", "ICICIBANK.NS", "TATAMOTORS.NS"])
+    # Searchable dropdown
+    sel_stock = st.selectbox("Search & Select Company", 
+                             ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "SBIN.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "BAJFINANCE.NS", "TITAN.NS"])
 with c2:
-    lookback = st.slider("Timeframe (Years)", 1, 10, 3) # Defaulted to 3
+    lookback = st.slider("Timeframe (Years)", 1, 15, 3)
 with c3:
     rf_rate = st.number_input("Risk Free Rate %", value=7.1) / 100
 
-data, list_date = get_unified_data(sel_stock, lookback)
+data, list_date = get_clean_data(sel_stock, lookback)
 
-if data is not None and len(data) > 20: # Ensure at least a month of data exists
-    # --- CALCULATION CORE ---
+if data is not None and len(data) > 10:
+    # --- CALCULATIONS ---
     returns = data.pct_change().dropna()
     
-    # Annualization factor (252 days)
-    actual_ann_ret = returns[sel_stock].mean() * 252
-    actual_ann_vol = returns[sel_stock].std() * np.sqrt(252)
-
-    # Beta Calculation (Market Sensitivity)
-    cov = returns.cov() * 252
+    # 1. Basic Performance Metrics
+    avg_annual_ret = returns[sel_stock].mean() * 252
+    ann_vol = returns[sel_stock].std() * np.sqrt(252)
+    
+    # 2. CAPM Logic
+    cov_mat = returns.cov() * 252
     mkt_var = returns['^NSEI'].var() * 252
-    beta = cov.loc[sel_stock, '^NSEI'] / mkt_var
-    mkt_ret = returns['^NSEI'].mean() * 252
+    beta = cov_mat.loc[sel_stock, '^NSEI'] / mkt_var
+    mkt_ann_ret = returns['^NSEI'].mean() * 252
+    capm_exp = rf_rate + beta * (mkt_ann_ret - rf_rate)
 
-    # Models
-    capm_exp = rf_rate + beta * (mkt_ret - rf_rate)
+    # 3. Factor Proxies (Robust for short term)
+    # Using Internal Momentum (1-year return) as the 4th factor proxy
+    stock_momentum = (data[sel_stock].pct_change(min(252, len(data)-1)).iloc[-1])
+    # Sensitivity to BankNifty as a proxy for 'Size/Financial' risk
+    beta_bank = (returns[sel_stock].rolling(len(returns)).corr(returns['^NSEBANK'])).iloc[-1]
     
-    # Factor correlation betas (Resilient to small samples)
-    corr = returns.corr()
-    b_mkt = corr.loc[sel_stock, '^NSEI']
-    b_bank = corr.loc[sel_stock, '^NSEBANK']
-    b_it = corr.loc[sel_stock, 'NIFTY_IT.NS']
-    
-    # Logic: Risk Free + (Factor Beta * Factor Premium)
-    # Using normalized premiums for Indian context
-    ff_exp = rf_rate + (b_mkt * 0.08) + (b_bank * 0.02) + (b_it * 0.03)
-    apt_exp = rf_rate + (b_mkt * 0.07) + (b_bank * 0.05)
+    # Expected Returns Models
+    ff_exp = rf_rate + (beta * 0.08) + (beta_bank * 0.03) + (stock_momentum * 0.05)
+    apt_exp = rf_rate + (beta * 0.09) + (beta_bank * 0.04)
 
-    # --- DISPLAY ---
-    col_left, col_right = st.columns([2, 1])
-    
-    with col_left:
-        st.subheader("Performance vs Nifty 50")
+    # --- DASHBOARD DISPLAY ---
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Avg Annualized Return", f"{avg_annual_ret:.2%}")
+    m2.metric("Annualized Volatility", f"{ann_vol:.2%}")
+    m3.metric("Stock Beta", f"{beta:.2f}")
+
+    st.divider()
+    col_l, col_r = st.columns([2, 1])
+
+    with col_l:
+        st.subheader("Cumulative Growth vs Market")
         cum_ret = (1 + returns).cumprod()
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret[sel_stock], name="Stock", line=dict(color='#2563eb', width=3)))
         fig.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret['^NSEI'], name="Nifty 50", line=dict(color='#94a3b8', dash='dot')))
-        fig.update_layout(template="plotly_white", margin=dict(l=0,r=0,t=20,b=0), height=400)
+        fig.update_layout(template="plotly_white", margin=dict(l=0,r=0,t=10,b=0), height=400)
         st.plotly_chart(fig, use_container_width=True)
 
-    with col_right:
-        st.subheader("Key Stats")
-        st.metric("Total Return (Period)", f"{(cum_ret[sel_stock].iloc[-1]-1):.2%}")
-        st.metric("Annualized Vol", f"{actual_ann_vol:.2%}")
-        st.metric("Beta (Systematic Risk)", f"{beta:.2f}")
+    with col_r:
+        st.subheader("Valuation Verdicts")
+        
+        def display_valuation(title, expected, actual):
+            alpha = actual - expected
+            v_text = "UNDERVALUED" if alpha > 0 else "OVERVALUED"
+            v_color = "status-undervalued" if alpha > 0 else "status-overvalued"
+            st.markdown(f"""
+                <div class="valuation-card">
+                    <div style='color:#64748b; font-size:0.75rem; text-transform:uppercase;'>{title}</div>
+                    <div style='font-size:1.4rem; font-weight:700;'>{expected:.2%}</div>
+                    <div style='font-size:0.95rem;'>Alpha: <span class='{v_color}'>{alpha:+.2%}</span></div>
+                    <div class='{v_color}' style='margin-top:10px; border-top:1px solid #f1f5f9; padding-top:10px;'>{v_text}</div>
+                </div>
+            """, unsafe_allow_html=True)
 
-    st.divider()
-    st.subheader("Valuation Verdicts")
-    v1, v2, v3 = st.columns(3)
+        display_valuation("CAPM Standard", capm_exp, avg_annual_ret)
+        display_valuation("4-Factor Model", ff_exp, avg_annual_ret)
+        display_valuation("APT Model", apt_exp, avg_annual_ret)
 
-    def draw_card(title, exp, actual):
-        alpha = actual - exp
-        v_text = "UNDERVALUED" if alpha > 0 else "OVERVALUED"
-        v_class = "status-undervalued" if alpha > 0 else "status-overvalued"
-        st.markdown(f"""
-            <div class="valuation-card">
-                <div style='color:#64748b; font-size:0.8rem;'>{title}</div>
-                <div style='font-size:1.6rem; font-weight:700;'>{exp:.2%}</div>
-                <div style='font-size:1rem;'>Alpha: <span class='{v_class}'>{alpha:+.2%}</span></div>
-                <div class='{v_class}' style='margin-top:10px; border-top:1px solid #eee; padding-top:10px;'>{v_text}</div>
-            </div>
-        """, unsafe_allow_html=True)
-
-    with v1: draw_card("CAPM Expected Return", capm_exp, actual_ann_ret)
-    with v2: draw_card("FF 4-Factor (Synthetic)", ff_exp, actual_ann_ret)
-    with v3: draw_card("APT Factor Model", apt_exp, actual_ann_ret)
+    # Note for Listing Date
+    if list_date > (datetime.now() - timedelta(days=lookback*365)):
+        st.caption(f"⚠️ *Note: Analysis timeframe limited to inception date ({list_date.date()})*")
 
 else:
-    st.warning("Insufficient data for the selected timeframe. Try increasing the years or selecting a different stock.")
+    st.error("🚨 Data Retrieval Error: Please ensure you are connected to the internet and using a valid NSE ticker.")
