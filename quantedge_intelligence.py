@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 from arch import arch_model
 from datetime import datetime, timedelta
 
-# --- UI THEME ---
+# --- LIGHT THEME UI ---
 st.set_page_config(page_title="QuantPro Advisor", layout="wide")
 st.markdown("""
     <style>
@@ -36,17 +36,18 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- ASSET UNIVERSE ---
-STOCKS = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "SBIN.NS", "ICICIBANK.NS", "TATAMOTORS.NS"]
+STOCKS = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "SBIN.NS", "ICICIBANK.NS", "TATAMOTORS.NS", "BAJFINANCE.NS", "TITAN.NS"]
 
-# --- SIDEBAR ---
+# --- SIDEBAR CONTROLS ---
 st.sidebar.title("🛠️ Global Settings")
 sel_stock = st.sidebar.selectbox("Select Asset", STOCKS)
 lookback = st.sidebar.slider("Timeframe (Years)", 1, 15, 5)
 rf_rate = st.sidebar.number_input("Risk Free Rate %", value=7.1) / 100
 
+# --- DATA ENGINE ---
 @st.cache_data
 def get_full_data(ticker, yrs):
-    start = datetime.now() - timedelta(days=yrs*365 + 300) 
+    start = datetime.now() - timedelta(days=yrs*365 + 365) # Buffer for 200MA
     df = yf.download([ticker, "^NSEI", "^NSEBANK"], start=start.strftime('%Y-%m-%d'))['Close']
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(1)
@@ -56,6 +57,7 @@ def get_full_data(ticker, yrs):
 data, listing_date = get_full_data(sel_stock, lookback)
 
 if data is not None:
+    # INITIALIZE ALL THREE TABS
     tab1, tab2, tab3 = st.tabs(["💎 Valuation & Market", "🏗️ Structural Strength", "🔮 Strategy Playbook"])
 
     # --- TAB 1: VALUATION ENGINE ---
@@ -71,127 +73,147 @@ if data is not None:
         m2.metric("Annualized Risk", f"{ann_risk:.2%}")
         m3.metric("Sharpe Ratio", f"{sharpe:.2f}")
         
-        # Valuation Logic
+        # Valuation Models
         beta = (returns.cov().loc[sel_stock, "^NSEI"] * 252) / (returns["^NSEI"].var() * 252)
         mkt_ret = returns["^NSEI"].mean() * 252
         
-        # 1. CAPM
         capm_exp = rf_rate + beta * (mkt_ret - rf_rate)
-        # 2. 4-Factor Proxy (Market, Beta_Bank for Size/Fin, Stock Momentum)
         beta_bank = returns[sel_stock].rolling(len(returns)).corr(returns['^NSEBANK']).iloc[-1]
-        mom_factor = returns[sel_stock].tail(252).sum() # 1Y Momentum
-        ff_exp = rf_rate + (beta * 0.08) + (beta_bank * 0.03) + (mom_factor * 0.05)
-        # 3. APT Proxy
-        apt_exp = rf_rate + (beta * 0.09) + (beta_bank * 0.04)
+        mom_factor = returns[sel_stock].tail(252).sum() 
+        ff_exp = rf_rate + (beta * 0.08) + (beta_bank * 0.02) + (mom_factor * 0.04)
+        apt_exp = rf_rate + (beta * 0.09) + (beta_bank * 0.03)
 
         st.divider()
         v1, v2, v3 = st.columns(3)
         def draw_val(name, exp, actual):
             alpha = actual - exp
-            status = "UNDERVALUED" if alpha > 0 else "OVERVALUED"
             v_class = "status-undervalued" if alpha > 0 else "status-overvalued"
-            st.markdown(f"""<div class='valuation-card'><small>{name}</small><h3>{exp:.2%}</h3>
+            st.markdown(f"""<div class='valuation-card'><small>{name}</small><h3>Exp: {exp:.2%}/yr</h3>
                         <p>Alpha: <span class='{v_class}'>{alpha:+.2%}</span></p>
-                        <p class='{v_class}'>{status}</p></div>""", unsafe_allow_html=True)
+                        <p class='{v_class}'>{"UNDERVALUED" if alpha > 0 else "OVERVALUED"}</p></div>""", unsafe_allow_html=True)
         
-        with v1: draw_val("CAPM Expected", capm_exp, avg_ann_ret)
+        with v1: draw_val("CAPM Model", capm_exp, avg_ann_ret)
         with v2: draw_val("4-Factor Model", ff_exp, avg_ann_ret)
         with v3: draw_val("APT Model", apt_exp, avg_ann_ret)
+        
+        # Performance Graph
+        cum_ret = (1 + returns).cumprod()
+        fig_cum = go.Figure()
+        fig_cum.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret[sel_stock], name="Stock", line=dict(color='#2563eb', width=3)))
+        fig_cum.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret['^NSEI'], name="Nifty 50", line=dict(color='#94a3b8', dash='dot')))
+        fig_cum.update_layout(template="plotly_white", height=400, title="Growth vs Nifty 50")
+        st.plotly_chart(fig_cum, use_container_width=True)
 
-    # --- TAB 2 (Kept as per your previous code) ---
+    # --- TAB 2: STRUCTURAL STRENGTH ---
     with tab2:
-        st.subheader("Price Structure & Trend Analysis")
-        # [Tab 2 Logic remains untouched]
+        st.title(f"Structural DNA: {sel_stock}")
+        data_t2 = data.copy()
+        data_t2['MA50'] = data_t2[sel_stock].rolling(50).mean()
+        data_t2['MA200'] = data_t2[sel_stock].rolling(200).mean()
+        last_p = data_t2[sel_stock].iloc[-1]
+        
+        st.subheader("1. The Institutional Filter")
+        c1, c2, c3 = st.columns(3)
+        with c1: st.metric("Trend vs 200-MA", "✅ BULLISH" if last_p > data_t2['MA200'].iloc[-1] else "❌ BEARISH")
+        with c2: st.metric("50/200 MA Cross", "🔥 GOLDEN" if data_t2['MA50'].iloc[-1] > data_t2['MA200'].iloc[-1] else "❄️ DEATH")
+        with c3: st.metric("Dist. 52W High", f"{((last_p / data_t2[sel_stock].max()) - 1):.2%}")
 
-    # --- TAB 3: UPDATED STRATEGY LOGIC ---
+        st.subheader("2. Price Memory (Support/Resistance)")
+        res = data_t2[sel_stock].tail(22).max()
+        supp = data_t2[sel_stock].tail(22).min()
+        fig_sr = go.Figure()
+        fig_sr.add_trace(go.Scatter(x=data_t2.tail(252).index, y=data_t2[sel_stock].tail(252), name="Price", line=dict(color='#1e3a8a')))
+        fig_sr.add_hline(y=res, line_dash="dash", line_color="green", annotation_text="Resis")
+        fig_sr.add_hline(y=supp, line_dash="dash", line_color="red", annotation_text="Supp")
+        fig_sr.update_layout(template="plotly_white", height=400)
+        st.plotly_chart(fig_sr, use_container_width=True)
+
+        st.subheader("3. Relative Strength & 4. Drawdowns")
+        rs_col, dd_col = st.columns(2)
+        with rs_col:
+            stock_30 = (data_t2[sel_stock].iloc[-1]/data_t2[sel_stock].iloc[-22])-1
+            nifty_30 = (data_t2['^NSEI'].iloc[-1]/data_t2['^NSEI'].iloc[-22])-1
+            rs = stock_30 - nifty_30
+            st.metric("Relative Strength (1M)", f"{rs:+.2%}", delta="vs Nifty 50")
+        with dd_col:
+            dd = (data_t2[sel_stock] - data_t2[sel_stock].cummax()) / data_t2[sel_stock].cummax()
+            st.metric("Max Period Drawdown", f"{dd.min():.2%}")
+
+    # --- TAB 3: STRATEGY & FORECAST ---
     with tab3:
         st.header("🔮 Forward Strategy Playbook")
         
         # GARCH Section
-        returns_garch = 100 * data[sel_stock].pct_change().dropna()
-        am = arch_model(returns_garch, vol='Garch', p=1, q=1, dist='t')
-        res = am.fit(disp="off")
-        forecast_vol = np.sqrt(res.forecast(horizon=252).variance.values[-1, :]) / 100
+        ret_g = 100 * data[sel_stock].pct_change().dropna()
+        am = arch_model(ret_g, vol='Garch', p=1, q=1, dist='t')
+        res_g = am.fit(disp="off")
+        f_vol = np.sqrt(res_g.forecast(horizon=252).variance.values[-1, :]) / 100
         
-        # Forecast Logic
+        # 1Y Price Forecast
         last_p = data[sel_stock].iloc[-1]
-        drift = returns_garch.mean() / 100
+        drift = ret_g.mean() / 100
         np.random.seed(42)
-        price_path = [last_p]
-        for i in range(252):
-            price_path.append(price_path[-1] * np.exp(drift + forecast_vol[i] * np.random.standard_normal()))
-        df_forecast = pd.DataFrame({'Close': price_path[1:]}, index=[data.index[-1] + timedelta(days=i) for i in range(1, 253)])
+        p_path = [last_p]
+        for i in range(252): p_path.append(p_path[-1] * np.exp(drift + f_vol[i] * np.random.standard_normal()))
+        df_f = pd.DataFrame({'Close': p_path[1:]}, index=[data.index[-1] + timedelta(days=i) for i in range(1, 253)])
 
-        # STRATEGY SELECTION
-        st.subheader("Strategy Configuration")
-        strat = st.selectbox("Select Strategy", ["RSI", "SMA Crossover", "Triple Golden Cross"])
+        # STRATEGY CUSTOMIZATION
+        st.subheader("Strategy Config & Explanation")
+        strat = st.selectbox("Methodology", ["RSI", "SMA Crossover", "Triple Golden Cross"])
         
-        def run_strategy_logic(df, s_type):
+        def apply_strat(df, s):
             df = df.copy()
-            if s_type == "RSI":
+            if s == "RSI":
                 p = st.slider("RSI Period", 7, 30, 14)
-                st.info("**Logic:** Buying when RSI dips below 30 (Oversold) and selling when it rises above 70 (Overbought). It assumes prices eventually return to their mean.")
+                st.info("**RSI Mean Reversion:** Buying when price is 'oversold' (RSI < 30) assuming a bounce.")
                 delta = df['Close'].diff()
                 gain = (delta.where(delta > 0, 0)).rolling(p).mean()
                 loss = (-delta.where(delta < 0, 0)).rolling(p).mean()
                 df['RSI'] = 100 - (100 / (1 + (gain/loss)))
                 df['Signal'] = np.where(df['RSI'] < 30, 1, 0)
-            
-            elif s_type == "SMA Crossover":
-                f, s = st.columns(2)
-                p1 = f.number_input("Fast SMA", value=20)
-                p2 = s.number_input("Slow SMA", value=50)
-                st.info("**Logic:** Classic momentum tracking. Buy when the Fast average moves above the Slow average, suggesting a trend acceleration.")
-                df['SMA_F'] = df['Close'].rolling(p1).mean()
-                df['SMA_S'] = df['Close'].rolling(p2).mean()
-                df['Signal'] = np.where(df['SMA_F'] > df['SMA_S'], 1, 0)
-                
-            elif s_type == "Triple Golden Cross":
+            elif s == "SMA Crossover":
+                p1 = st.number_input("Fast SMA", value=20)
+                p2 = st.number_input("Slow SMA", value=50)
+                st.info("**Momentum Crossover:** Buying when short-term trend rises above long-term trend.")
+                df['F'] = df['Close'].rolling(p1).mean(); df['S'] = df['Close'].rolling(p2).mean()
+                df['Signal'] = np.where(df['F'] > df['S'], 1, 0)
+            elif s == "Triple Golden Cross":
                 t1, t2, t3 = st.columns(3)
-                p_s = t1.number_input("Small (Fast)", value=10)
-                p_m = t2.number_input("Medium", value=50)
-                p_l = t3.number_input("Long (Baseline)", value=200)
-                st.info("**Institutional Logic:** Buy only when the Small MA crosses above the Medium MA while *below* the Long-term curve (Early recovery). Sell when Small MA crosses below Medium while *above* the Long-term curve (Trend exhaustion).")
-                df['S'] = df['Close'].rolling(p_s).mean()
-                df['M'] = df['Close'].rolling(p_m).mean()
-                df['L'] = df['Close'].rolling(p_l).mean()
-                # Logic: Buy if Small > Medium AND Medium < Long
-                df['Signal'] = np.where((df['S'] > df['M']) & (df['M'] < df['L']), 1, 0)
+                ps, pm, pl = t1.number_input("Short", 10), t2.number_input("Mid", 50), t3.number_input("Long", 200)
+                st.info("**Cluster Logic:** Buy only when Short MA crosses Mid MA *below* the Long curve (early trend). Sell when Short crosses Mid *above* the Long curve.")
+                df['MA_S'], df['MA_M'], df['MA_L'] = df['Close'].rolling(ps).mean(), df['Close'].rolling(pm).mean(), df['Close'].rolling(pl).mean()
+                # User's Specific Logic
+                df['Signal'] = 0
+                buy_cond = (df['MA_S'] > df['MA_M']) & (df['MA_S'].shift(1) < df['MA_M'].shift(1)) & (df['MA_S'] < df['MA_L'])
+                sell_cond = (df['MA_S'] < df['MA_M']) & (df['MA_S'].shift(1) > df['MA_M'].shift(1)) & (df['MA_S'] > df['MA_L'])
+                # Applying persistence
+                curr_sig = 0
+                for i in range(len(df)):
+                    if buy_cond.iloc[i]: curr_sig = 1
+                    elif sell_cond.iloc[i]: curr_sig = 0
+                    df.iloc[i, df.columns.get_loc('Signal')] = curr_sig
             
-            df['Ret'] = df['Close'].pct_change()
-            df['Strat_Ret'] = df['Signal'].shift(1) * df['Ret']
+            df['Strat_Ret'] = df['Signal'].shift(1) * df['Close'].pct_change()
             return df
 
-        # Execute
-        full_data = pd.concat([data[[sel_stock]].tail(250).rename(columns={sel_stock:'Close'}), df_forecast])
-        final_df = run_strategy_logic(full_data, strat).loc[df_forecast.index]
+        full_bt = pd.concat([data[[sel_stock]].tail(252).rename(columns={sel_stock:'Close'}), df_f])
+        res_bt = apply_strat(full_bt, strat).loc[df_f.index]
 
-        # OUTPUTS
-        c_left, c_right = st.columns([2, 1])
-        with c_right:
-            st.write("**Forecasted Strategy Metrics**")
-            ret = final_df['Strat_Ret'].mean() * 252
-            risk = final_df['Strat_Ret'].std() * np.sqrt(252)
-            met_df = pd.DataFrame({
-                "Metric": ["Return", "Risk", "Sharpe", "Trades"],
-                "Value": [f"{ret:.2%}", f"{risk:.2%}", f"{(ret/risk if risk!=0 else 0):.2f}", int(final_df['Signal'].diff().abs().sum())]
-            })
-            st.table(met_df)
+        # Results Table
+        st.subheader("Performance Summary (Forecasted Year)")
+        ret_f = res_bt['Strat_Ret'].mean() * 252
+        risk_f = res_bt['Strat_Ret'].std() * np.sqrt(252)
+        st.table(pd.DataFrame({"Metric": ["Return", "Risk", "Sharpe", "Trades"], 
+                               "Value": [f"{ret_f:.2%}", f"{risk_f:.2%}", f"{(ret_f/risk_f if risk_f!=0 else 0):.2f}", int(res_bt['Signal'].diff().abs().sum())]}))
+        
+        # Forecast Signal Chart
+        fig_f = go.Figure()
+        fig_f.add_trace(go.Scatter(x=res_bt.index, y=res_bt['Close'], name="Future Price", line=dict(color='#94a3b8')))
+        buys = res_bt[res_bt['Signal'].diff() == 1]; sells = res_bt[res_bt['Signal'].diff() == -1]
+        fig_f.add_trace(go.Scatter(x=buys.index, y=buys['Close'], mode='markers', name='BUY', marker=dict(symbol='triangle-up', size=15, color='green')))
+        fig_f.add_trace(go.Scatter(x=sells.index, y=sells['Close'], mode='markers', name='SELL', marker=dict(symbol='triangle-down', size=15, color='red')))
+        st.plotly_chart(fig_f, use_container_width=True)
 
-        with c_left:
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=final_df.index, y=final_df['Close'], name="Future Price", line=dict(color='#94a3b8')))
-            buys = final_df[final_df['Signal'].diff() == 1]
-            sells = final_df[final_df['Signal'].diff() == -1]
-            fig.add_trace(go.Scatter(x=buys.index, y=buys['Close'], mode='markers', name='BUY', marker=dict(symbol='triangle-up', size=15, color='green')))
-            fig.add_trace(go.Scatter(x=sells.index, y=sells['Close'], mode='markers', name='SELL', marker=dict(symbol='triangle-down', size=15, color='red')))
-            st.plotly_chart(fig, use_container_width=True)
-    
-    
-
-
-
-
-
+else: st.error("Data fetch failed. Verify ticker or internet.")
 
 
