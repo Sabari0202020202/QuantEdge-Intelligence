@@ -14,6 +14,8 @@ import numpy as np
 import plotly.graph_objects as go
 from arch import arch_model
 from datetime import datetime, timedelta
+from scipy.stats import norm
+from scipy.optimize import fsolve
 
 # --- LIGHT THEME UI ---
 st.set_page_config(page_title="QuantPro Advisor", layout="wide")
@@ -217,3 +219,93 @@ if data is not None:
 else: st.error("Data fetch failed. Verify ticker or internet.")
 
 
+# --- CONTINUATION OF PREVIOUS SCRIPT ---
+# Ensure tab4 is added to the initial tabs definition:
+# tab1, tab2, tab3, tab4 = st.tabs(["💎 Valuation", "🏗️ Structure", "🔮 Strategy", "📉 Credit Risk"])
+
+with tab4:
+    st.header("📉 Credit Risk: Structural Probability of Default")
+    st.info("""**Strategic Insight:** This model uses the Merton/KMV framework to assess if the market 
+    is underestimating the risk of insolvency. It treats equity as a call option on the firm's total assets.""")
+
+    # 1. PARAMETER SELECTION
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+        model_type = st.radio("Select Model", ["Merton Model", "KMV Model (Proxy)"])
+        # Debt assumption for Indian Large-caps (Total Liabilities)
+        # In a production app, this should be scraped from balance sheets. 
+        # Here we allow user input for the 'Default Barrier' (Short term + 0.5 * Long term debt)
+        debt_val = st.number_input("Face Value of Debt (in Cr ₹)", value=50000.0)
+        t_horizon = st.slider("Time Horizon (Years)", 1.0, 5.0, 1.0)
+    
+    with col_p2:
+        st.write("**Model Explanation**")
+        if model_type == "Merton Model":
+            st.write("Calculates default risk based on a fixed debt barrier and normal distribution of asset returns.")
+        else:
+            st.write("KMV approach uses a 'Default Point' (Short-term debt + 50% Long-term debt) to calculate Expected Default Frequency (EDF).")
+
+    # 2. DATA CALCULATIONS
+    # Get current equity value (Market Cap)
+    ticker_info = yf.Ticker(sel_stock).info
+    equity_val = ticker_info.get('marketCap', 1) / 10000000 # Convert to Cr
+    
+    # Calculate Equity Volatility (Annualized)
+    eq_returns = data[sel_stock].pct_change().dropna()
+    sigma_e = eq_returns.std() * np.sqrt(252)
+    
+    # MERTON SYSTEM OF EQUATIONS
+    # We solve for Asset Value (V) and Asset Volatility (sigma_v)
+    def merton_equations(vars):
+        V, sigma_v = vars
+        d1 = (np.log(V/debt_val) + (rf_rate + 0.5 * sigma_v**2) * t_horizon) / (sigma_v * np.sqrt(t_horizon))
+        d2 = d1 - sigma_v * np.sqrt(t_horizon)
+        
+        # Equation 1: Black-Scholes for Equity
+        eq1 = V * norm.cdf(d1) - debt_val * np.exp(-rf_rate * t_horizon) * norm.cdf(d2) - equity_val
+        # Equation 2: Relationship between Equity and Asset Volatility
+        eq2 = (norm.cdf(d1) * V / equity_val) * sigma_v - sigma_e
+        return [eq1, eq2]
+
+    # Initial Guesses
+    v_guess = equity_val + debt_val
+    sigma_v_guess = sigma_e * (equity_val / v_guess)
+    
+    try:
+        sol = fsolve(merton_equations, [v_guess, sigma_v_guess])
+        v_asset, sigma_asset = sol[0], sol[1]
+
+        # 3. OUTPUTS: DD and PD
+        d1 = (np.log(v_asset/debt_val) + (rf_rate + 0.5 * sigma_asset**2) * t_horizon) / (sigma_asset * np.sqrt(t_horizon))
+        d2 = d1 - sigma_asset * np.sqrt(t_horizon)
+        
+        distance_to_default = d2
+        prob_of_default = norm.cdf(-distance_to_default)
+
+        # UI OUTPUT CARDS
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Distance to Default (DD)", f"{distance_to_default:.2f} σ")
+        c2.metric("Prob. of Default (PD)", f"{prob_of_default:.4%}")
+        c3.metric("Asset Value (Cr)", f"₹{v_asset:,.0f}")
+        c4.metric("Asset Volatility", f"{sigma_asset:.2%}")
+
+        st.divider()
+
+        # 4. STRATEGIC EXPLANATION
+        st.subheader("💡 Strategic Credit Analysis")
+        
+        exp1, exp2, exp3 = st.columns(3)
+        with exp1:
+            st.markdown(f"**PD / EDF ({prob_of_default:.2%})**")
+            st.write("Is the credit mispriced? If PD is rising while the stock price stays flat, a 'Credit-Equity Divergence' is occurring. This is often a lead indicator of a crash.")
+        
+        with exp2:
+            st.markdown(f"**Distance to Default ({distance_to_default:.2f})**")
+            st.write(f"The company is **{distance_to_default:.2f} standard deviations** away from insolvency. A DD below 2.0 is a 'ticking bomb' for long-term investors.")
+            
+        with exp3:
+            st.markdown(f"**Asset Volatility ({sigma_asset:.2%})**")
+            st.write("This measures the risk of the business operations, independent of leverage. High asset vol means the buffer can evaporate rapidly.")
+
+    except Exception as e:
+        st.error(f"Could not converge on a solution: {e}. This usually happens if the debt levels entered are too high relative to equity.")
