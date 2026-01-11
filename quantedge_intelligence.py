@@ -59,7 +59,7 @@ def get_full_data(ticker, yrs):
 data, listing_date = get_full_data(sel_stock, lookback)
 
 if data is not None:
-    # INITIALIZE ALL THREE TABS
+    # INITIALIZE ALL FOUR TABS
     tab1, tab2, tab3, tab4 = st.tabs(["💎 Valuation & Market", "🏗️ Structural Strength", "🔮 Strategy Playbook", "📉 Credit Risk"])
 
     # --- TAB 1: VALUATION ENGINE ---
@@ -309,3 +309,4 @@ else: st.error("Data fetch failed. Verify ticker or internet.")
     
         except Exception as e:
             st.error(f"Could not converge on a solution: {e}. This usually happens if the debt levels entered are too high relative to equity.")
+
