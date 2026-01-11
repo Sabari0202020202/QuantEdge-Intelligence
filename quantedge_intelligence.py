@@ -49,7 +49,7 @@ NIFTY_50 = {
 st.sidebar.title("🛠️ Global Settings")
 sel_mode = st.sidebar.selectbox("Select Asset", list(NIFTY_50.keys()))
 if sel_mode == "Others":
-    sel_stock = st.sidebar.text_input("Enter Yahoo Finance Code", "ZOMATO.NS").upper()
+    sel_stock = st.sidebar.text_input("Enter Yahoo Finance Code", "ETERNAL.NS").upper()
 else:
     sel_stock = sel_mode
 
