@@ -7,6 +7,7 @@ Original file is located at
     https://colab.research.google.com/drive/1gkmpljoOIvjbKUjTAM0G8OCGRZI-inXT
 """
 
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -60,11 +61,11 @@ data, listing_date = get_full_data(sel_stock, lookback)
 
 if data is not None:
     # INITIALIZE ALL FOUR TABS
-    tab1, tab2, tab3, tab4 = st.tabs(["💎 Valuation & Market", "🏗️ Structural Strength", "🔮 Strategy Playbook", "📉 Credit Risk"])
+    tab1, tab2, tab3, tab4 = st.tabs(["💎 Valuation", "🏗️ Structure", "🔮 Strategy", "📉 Credit Risk"])
 
     # --- TAB 1: VALUATION ENGINE ---
     with tab1:
-        st.title(f"Valuation: {sel_stock}")
+        st.title(f"Valuation Dashboard: {sel_stock}")
         returns = data.pct_change().dropna()
         avg_ann_ret = returns[sel_stock].mean() * 252
         ann_risk = returns[sel_stock].std() * np.sqrt(252)
@@ -78,6 +79,7 @@ if data is not None:
         beta = (returns.cov().loc[sel_stock, "^NSEI"] * 252) / (returns["^NSEI"].var() * 252)
         mkt_ret = returns["^NSEI"].mean() * 252
         
+        # Models
         capm_exp = rf_rate + beta * (mkt_ret - rf_rate)
         beta_bank = returns[sel_stock].rolling(len(returns)).corr(returns['^NSEBANK']).iloc[-1]
         mom_factor = returns[sel_stock].tail(252).sum() 
@@ -97,49 +99,47 @@ if data is not None:
         with v2: draw_val("4-Factor Model", ff_exp, avg_ann_ret)
         with v3: draw_val("APT Model", apt_exp, avg_ann_ret)
         
+        # Chart
         cum_ret = (1 + returns).cumprod()
         fig_cum = go.Figure()
         fig_cum.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret[sel_stock], name="Stock", line=dict(color='#2563eb', width=3)))
         fig_cum.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret['^NSEI'], name="Nifty 50", line=dict(color='#94a3b8', dash='dot')))
-        fig_cum.update_layout(template="plotly_white", height=400, title="Growth vs Nifty 50")
+        fig_cum.update_layout(template="plotly_white", height=400, title="Cumulative Performance vs Market")
         st.plotly_chart(fig_cum, use_container_width=True)
 
-    # --- TAB 2: STRUCTURAL STRENGTH ---
+    # --- TAB 2: STRUCTURAL DNA ---
     with tab2:
-        st.title(f"Structural DNA: {sel_stock}")
+        st.title(f"Price Structure: {sel_stock}")
         data_t2 = data.copy()
         data_t2['MA50'] = data_t2[sel_stock].rolling(50).mean()
         data_t2['MA200'] = data_t2[sel_stock].rolling(200).mean()
         last_p = data_t2[sel_stock].iloc[-1]
         
-        st.subheader("1. The Institutional Filter")
+        st.subheader("1. Institutional Trend Filter")
         c1, c2, c3 = st.columns(3)
         with c1: st.metric("Trend vs 200-MA", "✅ BULLISH" if last_p > data_t2['MA200'].iloc[-1] else "❌ BEARISH")
         with c2: st.metric("50/200 MA Cross", "🔥 GOLDEN" if data_t2['MA50'].iloc[-1] > data_t2['MA200'].iloc[-1] else "❄️ DEATH")
         with c3: st.metric("Dist. 52W High", f"{((last_p / data_t2[sel_stock].max()) - 1):.2%}")
 
-        st.subheader("2. Price Memory (Support/Resistance)")
-        res = data_t2[sel_stock].tail(22).max()
-        supp = data_t2[sel_stock].tail(22).min()
+        st.subheader("2. Support & Resistance")
+        res = data_t2[sel_stock].tail(22).max(); supp = data_t2[sel_stock].tail(22).min()
         fig_sr = go.Figure()
         fig_sr.add_trace(go.Scatter(x=data_t2.tail(252).index, y=data_t2[sel_stock].tail(252), name="Price", line=dict(color='#1e3a8a')))
-        fig_sr.add_hline(y=res, line_dash="dash", line_color="green", annotation_text="Resis")
-        fig_sr.add_hline(y=supp, line_dash="dash", line_color="red", annotation_text="Supp")
+        fig_sr.add_hline(y=res, line_dash="dash", line_color="green", annotation_text="Resistance")
+        fig_sr.add_hline(y=supp, line_dash="dash", line_color="red", annotation_text="Support")
         fig_sr.update_layout(template="plotly_white", height=400)
         st.plotly_chart(fig_sr, use_container_width=True)
 
-        st.subheader("3. Relative Strength & 4. Drawdowns")
+        st.subheader("3. Relative Strength & Drawdowns")
         rs_col, dd_col = st.columns(2)
         with rs_col:
-            stock_30 = (data_t2[sel_stock].iloc[-1]/data_t2[sel_stock].iloc[-22])-1
-            nifty_30 = (data_t2['^NSEI'].iloc[-1]/data_t2['^NSEI'].iloc[-22])-1
-            rs = stock_30 - nifty_30
+            rs = (data_t2[sel_stock].iloc[-1]/data_t2[sel_stock].iloc[-22]) - (data_t2['^NSEI'].iloc[-1]/data_t2['^NSEI'].iloc[-22])
             st.metric("Relative Strength (1M)", f"{rs:+.2%}", delta="vs Nifty 50")
         with dd_col:
             dd = (data_t2[sel_stock] - data_t2[sel_stock].cummax()) / data_t2[sel_stock].cummax()
             st.metric("Max Period Drawdown", f"{dd.min():.2%}")
 
-    # --- TAB 3: STRATEGY & FORECAST ---
+    # --- TAB 3: STRATEGY PLAYBOOK ---
     with tab3:
         st.header("🔮 Forward Strategy Playbook")
         ret_g = 100 * data[sel_stock].pct_change().dropna()
@@ -154,82 +154,66 @@ if data is not None:
         for i in range(252): p_path.append(p_path[-1] * np.exp(drift + f_vol[i] * np.random.standard_normal()))
         df_f = pd.DataFrame({'Close': p_path[1:]}, index=[data.index[-1] + timedelta(days=i) for i in range(1, 253)])
 
-        st.subheader("Strategy Config & Explanation")
-        strat = st.selectbox("Methodology", ["RSI", "SMA Crossover", "Triple Golden Cross"])
-        
+        strat = st.selectbox("Strategy Method", ["RSI", "SMA Crossover", "Triple Golden Cross"])
         def apply_strat(df, s):
             df = df.copy()
             if s == "RSI":
                 p = st.slider("RSI Period", 7, 30, 14)
-                st.info("**RSI Mean Reversion:** Buying when price is 'oversold' (RSI < 30) assuming a bounce.")
-                delta = df['Close'].diff()
-                gain = (delta.where(delta > 0, 0)).rolling(p).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(p).mean()
-                df['RSI'] = 100 - (100 / (1 + (gain/loss)))
-                df['Signal'] = np.where(df['RSI'] < 30, 1, 0)
+                delta = df['Close'].diff(); g = (delta.where(delta > 0, 0)).rolling(p).mean(); l = (-delta.where(delta < 0, 0)).rolling(p).mean()
+                df['RSI'] = 100 - (100 / (1 + (g/l))); df['Signal'] = np.where(df['RSI'] < 30, 1, 0)
             elif s == "SMA Crossover":
                 p1 = st.number_input("Fast SMA", value=20); p2 = st.number_input("Slow SMA", value=50)
-                st.info("**Momentum Crossover:** Buying when short-term trend rises above long-term trend.")
-                df['F'] = df['Close'].rolling(p1).mean(); df['S'] = df['Close'].rolling(p2).mean()
-                df['Signal'] = np.where(df['F'] > df['S'], 1, 0)
+                df['F'] = df['Close'].rolling(p1).mean(); df['S'] = df['Close'].rolling(p2).mean(); df['Signal'] = np.where(df['F'] > df['S'], 1, 0)
             elif s == "Triple Golden Cross":
-                t1, t2, t3 = st.columns(3)
-                ps, pm, pl = t1.number_input("Short", 10), t2.number_input("Mid", 50), t3.number_input("Long", 200)
-                st.info("**Cluster Logic:** Buy only when Short MA crosses Mid MA *below* the Long curve (early trend). Sell when Short crosses Mid *above* the Long curve.")
+                t1, t2, t3 = st.columns(3); ps, pm, pl = t1.number_input("Short", 10), t2.number_input("Mid", 50), t3.number_input("Long", 200)
                 df['MA_S'], df['MA_M'], df['MA_L'] = df['Close'].rolling(ps).mean(), df['Close'].rolling(pm).mean(), df['Close'].rolling(pl).mean()
-                df['Signal'] = 0; buy_cond = (df['MA_S'] > df['MA_M']) & (df['MA_S'].shift(1) < df['MA_M'].shift(1)) & (df['MA_S'] < df['MA_L'])
-                sell_cond = (df['MA_S'] < df['MA_M']) & (df['MA_S'].shift(1) > df['MA_M'].shift(1)) & (df['MA_S'] > df['MA_L'])
-                curr_sig = 0
+                # Triple Logic: Buy if Short crosses Mid from below while below Long
+                df['Signal'] = 0; buy_c = (df['MA_S'] > df['MA_M']) & (df['MA_S'].shift(1) < df['MA_M'].shift(1)) & (df['MA_S'] < df['MA_L'])
+                sell_c = (df['MA_S'] < df['MA_M']) & (df['MA_S'].shift(1) > df['MA_M'].shift(1)) & (df['MA_S'] > df['MA_L'])
+                curr_s = 0
                 for i in range(len(df)):
-                    if buy_cond.iloc[i]: curr_sig = 1
-                    elif sell_cond.iloc[i]: curr_sig = 0
-                    df.iloc[i, df.columns.get_loc('Signal')] = curr_sig
+                    if buy_c.iloc[i]: curr_s = 1
+                    elif sell_c.iloc[i]: curr_s = 0
+                    df.iloc[i, df.columns.get_loc('Signal')] = curr_s
             df['Strat_Ret'] = df['Signal'].shift(1) * df['Close'].pct_change()
             return df
 
         full_bt = pd.concat([data[[sel_stock]].tail(252).rename(columns={sel_stock:'Close'}), df_f])
         res_bt = apply_strat(full_bt, strat).loc[df_f.index]
-
-        st.subheader("Performance Summary (Forecasted Year)")
-        ret_f = res_bt['Strat_Ret'].mean() * 252; risk_f = res_bt['Strat_Ret'].std() * np.sqrt(252)
-        st.table(pd.DataFrame({"Metric": ["Return", "Risk", "Sharpe", "Trades"], "Value": [f"{ret_f:.2%}", f"{risk_f:.2%}", f"{(ret_f/risk_f if risk_f!=0 else 0):.2f}", int(res_bt['Signal'].diff().abs().sum())]}))
+        
+        st.subheader("Performance Forecast Summary")
+        rf, rif = res_bt['Strat_Ret'].mean() * 252, res_bt['Strat_Ret'].std() * np.sqrt(252)
+        st.table(pd.DataFrame({"Metric": ["Return", "Risk", "Sharpe", "Trades"], "Value": [f"{rf:.2%}", f"{rif:.2%}", f"{(rf/rif if rif!=0 else 0):.2f}", int(res_bt['Signal'].diff().abs().sum())]}))
         fig_f = go.Figure()
-        fig_f.add_trace(go.Scatter(x=res_bt.index, y=res_bt['Close'], name="Future Price", line=dict(color='#94a3b8')))
+        fig_f.add_trace(go.Scatter(x=res_bt.index, y=res_bt['Close'], name="Forecast", line=dict(color='#94a3b8')))
         buys = res_bt[res_bt['Signal'].diff() == 1]; sells = res_bt[res_bt['Signal'].diff() == -1]
         fig_f.add_trace(go.Scatter(x=buys.index, y=buys['Close'], mode='markers', name='BUY', marker=dict(symbol='triangle-up', size=15, color='green')))
         fig_f.add_trace(go.Scatter(x=sells.index, y=sells['Close'], mode='markers', name='SELL', marker=dict(symbol='triangle-down', size=15, color='red')))
         st.plotly_chart(fig_f, use_container_width=True)
 
-    # --- TAB 4: CREDIT RISK ---
+    # --- TAB 4: CREDIT RISK ENGINE ---
     with tab4:
-        st.header("📉 Automated Credit Risk: Merton & KMV Framework")
-        
+        st.header("📉 Credit Risk: Structural Probability of Default")
         @st.cache_data(ttl=3600)
-        def fetch_debt_structure(ticker):
-            t = yf.Ticker(ticker)
-            bs = t.balance_sheet; info = t.info
-            try:
-                st_debt = bs.loc['CurrentDebt'].iloc[0] / 1e7 if 'CurrentDebt' in bs.index else 0
-                lt_debt = bs.loc['LongTermDebt'].iloc[0] / 1e7 if 'LongTermDebt' in bs.index else 0
-                total_liab = info.get('totalDebt', 0) / 1e7
-                mkt_cap = info.get('marketCap', 1) / 1e7
-                return st_debt, lt_debt, total_liab, mkt_cap
-            except:
-                return 0, 0, info.get('totalDebt', 0)/1e7, info.get('marketCap', 1)/1e7
+        def fetch_debt_details(ticker):
+            t = yf.Ticker(ticker); bs = t.balance_sheet; info = t.info
+            def get_val(labels):
+                for label in labels:
+                    matches = [i for i in bs.index if label.lower() in str(i).lower()]
+                    if matches: return bs.loc[matches[0]].iloc[0] / 1e7
+                return 0.0
+            std = get_val(['Current Debt', 'Short Term Borrowings']); ltd = get_val(['Long Term Debt', 'Long Term Borrowings'])
+            return std, ltd, info.get('totalDebt', 0)/1e7, info.get('marketCap', 1)/1e7
 
-        st_d, lt_d, total_d, m_cap = fetch_debt_structure(sel_stock)
-        st.write("**Raw Data Used in Model:**")
-        st.table(pd.DataFrame({"Component": ["ST Debt", "LT Debt", "Total Debt", "Market Cap"], "Value (Cr ₹)": [f"{st_d:,.2f}", f"{lt_d:,.2f}", f"{total_d:,.2f}", f"{m_cap:,.2f}"]}))
+        std, ltd, total_d, m_cap = fetch_debt_details(sel_stock)
+        st.write("**Live Model Inputs (Cr ₹):**")
+        st.table(pd.DataFrame({"Component": ["Short Term Debt", "Long Term Debt", "Total Debt", "Market Cap"], "Value": [f"{std:,.2f}", f"{ltd:,.2f}", f"{total_d:,.2f}", f"{m_cap:,.2f}"]}))
 
-        col_m1, col_m2 = st.columns(2)
-        with col_m1:
-            model_type = st.radio("Framework", ["Merton Model", "KMV Model"])
-            t_horizon = st.slider("Time Horizon (Yrs)", 1.0, 5.0, 1.0)
-        with col_m2:
-            if model_type == "Merton Model": barrier = total_d if total_d > 0 else 5000.0
-            else: barrier = st_d + (0.5 * lt_d); barrier = barrier if barrier > 0 else total_d * 0.7
-            barrier = st.number_input("Calculated Default Barrier (Cr ₹)", value=float(barrier))
-
+        m_type = st.radio("Framework Selection", ["Merton Model", "KMV Model"])
+        if m_type == "KMV Model": barrier = std + (0.5 * ltd); barrier = barrier if barrier > 0 else total_d * 0.7
+        else: barrier = total_d if total_d > 0 else 5000.0
+        barrier = st.number_input("Final Default Barrier (Cr ₹)", value=float(barrier))
+        
         def solve_structural(E, sigma_e, L, r, T):
             def eq(p):
                 V, sv = p; d1 = (np.log(V/L) + (r + 0.5 * sv**2) * T) / (sv * np.sqrt(T)); d2 = d1 - sv * np.sqrt(T)
@@ -238,19 +222,13 @@ if data is not None:
 
         try:
             eq_v = data[sel_stock].pct_change().dropna().std() * np.sqrt(252)
-            va, sa = solve_structural(m_cap, eq_v, barrier, rf_rate, t_horizon)
-            dd = (np.log(va/barrier) + (rf_rate - 0.5 * sa**2) * t_horizon) / (sa * np.sqrt(t_horizon))
-            pd_val = norm.cdf(-dd)
+            va, sa = solve_structural(m_cap, eq_v, barrier, rf_rate, 1.0)
+            dd = (np.log(va/barrier) + (rf_rate - 0.5 * sa**2)) / sa; pdv = norm.cdf(-dd)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Distance to Default", f"{dd:.2f} σ"); c2.metric("Prob. of Default", f"{pd_val:.4%}")
+            c1.metric("Distance to Default", f"{dd:.2f} σ"); c2.metric("Prob. of Default", f"{pdv:.4%}")
             c3.metric("Asset Value (Cr)", f"₹{va:,.0f}"); c4.metric("Asset Volatility", f"{sa:.2%}")
-            st.divider(); st.subheader("💡 Strategic Credit Intelligence")
-            exp1, exp2 = st.columns(2)
-            with exp1: st.write("### PD/EDF Analysis"); st.write(f"The Expected Default Frequency is **{pd_val:.4%}**. Rising EDF vs flat equity signals 'Credit Divergence'.")
-            with exp2: st.write("### Buffer & Volatility"); st.write(f"DD of **{dd:.2f} sigma** provides the safety cushion. Asset Vol ({sa:.2%}) measures operating risk.")
-        except Exception as e: st.error(f"Solver Error: {e}")
+        except Exception as e: st.error(f"Converge error: {e}")
 
-else: st.error("Data fetch failed. Verify ticker or internet.")
-
+else: st.error("Data load failed.")
 
 
