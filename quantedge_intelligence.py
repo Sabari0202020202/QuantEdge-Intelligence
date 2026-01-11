@@ -44,7 +44,7 @@ st.markdown("""
 
 # --- SIDEBAR: PERSONAL BRANDING & CAPABILITIES ---
 with st.sidebar:
-    st.title("🛡️ QuantPro Intelligence")
+    st.title("🛡️ Single-Stock Alpha Terminal: Analysis, Valuation & Strategy")
     st.markdown("---")
     st.markdown("### **Key Capabilities**")
     st.markdown("""
