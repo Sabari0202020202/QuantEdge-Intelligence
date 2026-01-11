@@ -13,6 +13,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from arch import arch_model
 from datetime import datetime, timedelta
 
 # --- LIGHT THEME UI ---
@@ -146,6 +147,150 @@ if data is not None:
 
 else:
     st.error("Could not fetch data.")
+
+# --- TAB 3: VOLATILITY & STRATEGY PLAYBOOK ---
+with tab3:
+    st.header("🔮 Volatility Forecasting & Future Playbook")
+    
+    # 1. GARCH (1,1) MODEL SUMMARY
+    st.subheader("1. GARCH (1,1) Volatility Analysis")
+    
+    # Calculate log returns for GARCH stability
+    returns_garch = 100 * data[sel_stock].pct_change().dropna()
+    
+    # Fit GARCH(1,1)
+    # Using Student's t-distribution for "fat tails" common in Indian markets
+    am = arch_model(returns_garch, vol='Garch', p=1, q=1, dist='t')
+    res = am.fit(disp="off")
+    
+    col_v1, col_v2 = st.columns([1, 2])
+    with col_v1:
+        st.write("**Model Parameters**")
+        st.write(res.params)
+        forecast_vol = np.sqrt(res.forecast(horizon=252).variance.values[-1, :]) / 100
+        st.metric("Predicted Annual Vol (Next Year)", f"{np.mean(forecast_vol)*np.sqrt(252):.2%}")
+    
+    with col_v2:
+        # Plotting Conditional Volatility
+        fig_vol = go.Figure()
+        fig_vol.add_trace(go.Scatter(x=res.conditional_volatility.index, 
+                                     y=res.conditional_volatility, 
+                                     name="Conditional Volatility", line=dict(color='#f59e0b')))
+        fig_vol.update_layout(template="plotly_white", title="Historical Volatility Clusters (GARCH)", height=300)
+        st.plotly_chart(fig_vol, use_container_width=True)
+
+    st.divider()
+
+    # 2. 1-YEAR PRICE FORECAST
+    st.subheader("2. 1-Year Price Path Projection")
+    
+    # Geometric Brownian Motion using GARCH Volatility
+    last_price = data[sel_stock].iloc[-1]
+    drift = returns_garch.mean() / 100
+    future_dates = [data.index[-1] + timedelta(days=i) for i in range(1, 253)]
+    
+    # Simulate path
+    np.random.seed(42)
+    daily_vol = forecast_vol # GARCH predicted daily sigma
+    shocks = np.random.standard_normal(252)
+    price_path = [last_price]
+    for i in range(252):
+        # S_t = S_{t-1} * exp(drift + vol * shock)
+        next_p = price_path[-1] * np.exp(drift + daily_vol[i] * shocks[i])
+        price_path.append(next_p)
+    
+    df_forecast = pd.DataFrame({'Close': price_path[1:]}, index=future_dates)
+    
+    fig_path = go.Figure()
+    fig_path.add_trace(go.Scatter(x=df_forecast.index, y=df_forecast['Close'], 
+                                  name="Projected Price", line=dict(color='#2563eb', width=3)))
+    fig_path.update_layout(template="plotly_white", title="Forecasted Closing Prices (Next 252 Days)", height=400)
+    st.plotly_chart(fig_path, use_container_width=True)
+
+    st.divider()
+
+    # 3. STRATEGY CONFIGURATION
+    st.subheader("3. Strategy Customization & Backtest")
+    
+    strat_choice = st.selectbox("Select Strategy", ["SMA Crossover", "RSI Mean Reversion", "Golden Crossover"])
+    
+    # Dynamic Parameters
+    if strat_choice == "SMA Crossover":
+        p1 = st.slider("Fast SMA Period", 5, 50, 20)
+        p2 = st.slider("Slow SMA Period", 20, 200, 50)
+    elif strat_choice == "RSI Mean Reversion":
+        p1 = st.slider("RSI Period", 7, 30, 14)
+        p2 = st.slider("Oversold Level", 10, 40, 30)
+    else: # Golden Cross
+        p1, p2 = 50, 200
+        st.info("Institutional Standard: 50-Day and 200-Day SMA used.")
+
+    # STRATEGY ENGINE
+    def run_engine(df, s_type, params):
+        df = df.copy()
+        if s_type in ["SMA Crossover", "Golden Crossover"]:
+            df['F'] = df['Close'].rolling(params[0]).mean()
+            df['S'] = df['Close'].rolling(params[1]).mean()
+            df['Signal'] = np.where(df['F'] > df['S'], 1, 0)
+        elif s_type == "RSI Mean Reversion":
+            delta = df['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(params[0]).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(params[0]).mean()
+            rs = gain / (loss + 1e-9)
+            df['RSI'] = 100 - (100 / (1 + rs))
+            df['Signal'] = np.where(df['RSI'] < params[1], 1, 0)
+        
+        df['Ret'] = df['Close'].pct_change()
+        df['Strat_Ret'] = df['Signal'].shift(1) * df['Ret']
+        return df
+
+    # Historic Backtest (using Tab 1 timeframe)
+    hist_bt = run_engine(data[[sel_stock]].rename(columns={sel_stock:'Close'}), strat_choice, [p1, p2])
+    
+    # Forecast Backtest
+    full_for_bt = pd.concat([data[[sel_stock]].tail(200).rename(columns={sel_stock:'Close'}), df_forecast])
+    fore_bt = run_engine(full_for_bt, strat_choice, [p1, p2]).loc[df_forecast.index]
+
+    # 4. RESULTS TABLES
+    st.subheader("4. Historical vs Forecasted Performance")
+    
+    def get_metrics(df):
+        ann_ret = df['Strat_Ret'].mean() * 252
+        ann_vol = df['Strat_Ret'].std() * np.sqrt(252)
+        sharpe = ann_ret / ann_vol if ann_vol != 0 else 0
+        trades = df['Signal'].diff().abs().sum()
+        return [f"{ann_ret:.2%}", f"{ann_vol:.2%}", round(sharpe, 2), int(trades)]
+
+    metrics_df = pd.DataFrame({
+        "Metric": ["Annual Return", "Annual Risk", "Sharpe Ratio", "Num. Trades"],
+        "Historical (Tab 1)": get_metrics(hist_bt),
+        "Forecasted (Next 1Y)": get_metrics(fore_bt)
+    })
+    st.table(metrics_df)
+
+    # 5. FORECAST SIGNAL CHART
+    st.subheader("5. Forecasted Signal Map")
+    fig_sig = go.Figure()
+    fig_sig.add_trace(go.Scatter(x=fore_bt.index, y=fore_bt['Close'], name="Future Price", line=dict(color='#94a3b8', width=1)))
+    
+    # Buy/Sell Markers
+    buys = fore_bt[fore_bt['Signal'].diff() == 1]
+    sells = fore_bt[fore_bt['Signal'].diff() == -1]
+    
+    fig_sig.add_trace(go.Scatter(x=buys.index, y=buys['Close'], mode='markers', name='BUY', 
+                                  marker=dict(symbol='triangle-up', size=12, color='#16a34a')))
+    fig_sig.add_trace(go.Scatter(x=sells.index, y=sells['Close'], mode='markers', name='SELL', 
+                                  marker=dict(symbol='triangle-down', size=12, color='#dc2626')))
+    
+    fig_sig.update_layout(template="plotly_white", title=f"Buy/Sell Execution on Forecasted Data ({strat_choice})")
+    st.plotly_chart(fig_sig, use_container_width=True)
+
+
+
+
+
+
+
 
 
 
