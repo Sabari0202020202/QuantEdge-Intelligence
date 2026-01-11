@@ -72,7 +72,7 @@ with tab_sel:
     st.subheader("1. Asset Selection")
     sel_mode = st.selectbox("Select Asset", ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "SBIN.NS", "TATAMOTORS.NS", "Others"])
     if sel_mode == "Others":
-        sel_stock = st.text_input("Enter Yahoo Ticker (e.g. ZOMATO.NS)", "ZOMATO.NS").upper()
+        sel_stock = st.text_input("Enter Yahoo Ticker (e.g. ETERNAL.NS)", "ETERNAL.NS").upper()
     else: sel_stock = sel_mode
     st.caption("*Justification: Defines the universe of data for all valuation and risk models.*")
     
