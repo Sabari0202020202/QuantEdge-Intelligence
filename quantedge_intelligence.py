@@ -48,12 +48,12 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### **Key Capabilities**")
     st.markdown("""
-    1. **Advanced Risk Suite:** Sharpe, Sortino, Calmar, Ulcer Index, and CVaR.
-    2. **Multi-Factor Valuation:** Alpha analysis via CAPM, 4-Factor, and APT.
-    3. **Structural DNA:** Institutional 200-MA filters and Support/Resistance memory.
-    4. **Volatility Forecasting:** GARCH (1,1) modeling for risk regimes.
-    5. **Strategy Backtester:** Triple-MA Cluster logic and RSI execution.
-    6. **Credit Risk Analysis:** Merton/KMV models for Probability of Default.
+    1. **Advanced Risk Suite:** *Sharpe, Sortino, Calmar, Ulcer Index, and CVaR calculations.*
+    2. **Multi-Factor Valuation:** *Comparative Alpha analysis using CAPM, 4-Factor, and APT.*
+    3. **Structural DNA:** *Institutional Trend filters (200-MA) and Support/Resistance memory.*
+    4. **Volatility Forecasting:** *GARCH (1,1) modeling for risk regimes.*
+    5. **Strategy Backtester:** *Customizable Triple-MA Cluster logic and RSI execution.*
+    6. **Credit Risk Analysis:** *Merton/KMV models for Probability of Default.*
     """)
     st.markdown("---")
     st.markdown("### **Developer Profile**")
@@ -102,18 +102,19 @@ def get_processed_data(ticker, yrs):
 data, ltp, ltp_time = get_processed_data(sel_stock, lookback_yrs)
 
 if data is not None:
+    # --- GLOBAL QUANT CALCULATION PRE-PROCESSING ---
     returns = data[sel_stock].pct_change().dropna()
     mkt_rets = data["^NSEI"].pct_change().dropna()
     ann_ret_raw = returns.mean() * 252
     ann_vol = returns.std() * np.sqrt(252)
-
+    cagr = (data[sel_stock].iloc[-1] / data[sel_stock].iloc[0])**(1/lookback_yrs) - 1
+    
     # --- TAB 1: ANALYSIS & VALUATION ---
     with tab1:
         st.title(f"Analysis & Valuation: {sel_stock}")
         st.write(f"**LTP:** ₹{ltp:,.2f} | **As of:** {ltp_time}")
         
-        # 1. High-Density Ratios
-        cagr = (data[sel_stock].iloc[-1] / data[sel_stock].iloc[0])**(1/lookback_yrs) - 1
+        # Risk Metrics
         sharpe = (ann_ret_raw - rf_rate) / ann_vol if ann_vol != 0 else 0
         downside_dev = returns[returns < 0].std() * np.sqrt(252)
         sortino = (ann_ret_raw - rf_rate) / downside_dev if downside_dev != 0 else 0
@@ -123,24 +124,26 @@ if data is not None:
         var_95 = np.percentile(returns, 5)
         cvar_95 = returns[returns <= var_95].mean()
         ulcer_index = np.sqrt(np.mean(dd**2))
-        beta = (returns.cov(mkt_rets) * 252) / (mkt_rets.var() * 252)
-        win_rate = len(returns[returns > 0]) / len(returns)
-        profit_factor = abs(returns[returns > 0].sum() / returns[returns < 0].sum()) if returns[returns < 0].sum() != 0 else 0
-        alpha_capm = ann_ret_raw - (rf_rate + beta * (mkt_rets.mean()*252 - rf_rate))
-
-        # 2. Multi-Factor Valuation Engine
-        st.subheader("Multi-Factor Valuation Alphas")
+        
+        # Market Metrics
+        cov = returns.cov(mkt_rets) * 252
+        mkt_var = mkt_rets.var() * 252
+        beta = cov / mkt_var
+        alpha_val = ann_ret_raw - (rf_rate + beta * (mkt_rets.mean()*252 - rf_rate))
+        
+        # Multi-Factor Logic
         capm_exp = rf_rate + beta * (mkt_rets.mean()*252 - rf_rate)
         ff_exp = rf_rate + (beta * 0.08) + (returns.rolling(252).corr(data['^NSEBANK'].pct_change()).iloc[-1] * 0.02)
         apt_exp = capm_exp + 0.015
 
+        st.subheader("Multi-Factor Valuation Alphas")
         v_cols = st.columns(3)
         def draw_v_card(col, name, exp, actual, help_t):
             al = actual - exp
             vc = "status-undervalued" if al > 0 else "status-overvalued"
             col.markdown(f"""<div class='valuation-card' title='{help_t}'><small>{name}</small><h3>Exp: {exp:.2%}</h3>
                         <p class='{vc}'>Alpha: {al:+.2%} ({"Undervalued" if al > 0 else "Overvalued"})</p></div>""", unsafe_allow_html=True)
-        draw_v_card(v_cols[0], "CAPM Model", capm_exp, cagr, "Market-risk adjusted baseline.")
+        draw_v_card(v_cols[0], "CAPM Model", capm_exp, cagr, "Market-risk adjusted expectation.")
         draw_v_card(v_cols[1], "4-Factor Model", ff_exp, cagr, "Market + Size + Momentum proxies.")
         draw_v_card(v_cols[2], "APT Model", apt_exp, cagr, "Macro-factor sector proxy.")
 
@@ -154,7 +157,7 @@ if data is not None:
 
         r_cols2 = st.columns(4)
         r_cols2[0].metric("Max Drawdown", f"{max_dd:.2%}", help="Worst peak-to-trough decline.")
-        r_cols2[1].metric("Avg Drawdown", f"{dd.mean():.2%}", help="Average decline from historical peaks.")
+        r_cols2[1].metric("Avg Drawdown", f"{dd.mean():.2%}", help="Mean decline from historical peaks.")
         r_cols2[2].metric("Ulcer Index", f"{ulcer_index:.2f}", help="Drawdown stress measurement.")
         r_cols2[3].metric("Ann. Volatility", f"{ann_vol:.2%}", help="Annualized Standard Deviation.")
 
@@ -165,15 +168,15 @@ if data is not None:
         r_cols3[3].metric("Skewness", f"{skew(returns):.2f}", help="Asymmetry of distribution.")
 
         r_cols4 = st.columns(4)
-        r_cols4[0].metric("Kurtosis", f"{kurtosis(returns):.2f}", help="Fat-tail risk measurement.")
-        r_cols4[1].metric("Win Rate", f"{win_rate:.2%}", help="Percentage of positive return days.")
-        r_cols4[2].metric("Profit Factor", f"{profit_factor:.2f}", help="Gross Profit / Gross Loss.")
-        r_cols4[3].metric("Gain-to-Pain", f"{returns.sum()/abs(returns[returns<0].sum()):.2f}", help="Total return per unit of loss.")
+        r_cols4[0].metric("Kurtosis", f"{kurtosis(returns):.2f}", help="Measure of fat-tails/outlier risk.")
+        r_cols4[1].metric("Win Rate", f"{len(returns[returns > 0]) / len(returns):.2%}", help="Percentage of positive return days.")
+        r_cols4[2].metric("Profit Factor", f"{abs(returns[returns > 0].sum() / returns[returns < 0].sum()) if returns[returns < 0].sum() != 0 else 0:.2f}", help="Gross Profit / Gross Loss.")
+        r_cols4[3].metric("Gain-to-Pain", f"{returns.sum()/abs(returns[returns<0].sum()) if returns[returns<0].sum() != 0 else 0:.2f}", help="Total return per unit of loss.")
 
         r_cols5 = st.columns(3)
         r_cols5[0].metric("Beta", f"{beta:.2f}", help="Sensitivity to Nifty 50.")
         r_cols5[1].metric("Alpha (Ann.)", f"{alpha_val:.2%}", help="Excess return above CAPM benchmark.")
-        r_cols5[2].metric("Information Ratio", f"{alpha_val/ann_vol:.2f}", help="Active return per unit of active risk.")
+        r_cols5[2].metric("Information Ratio", f"{alpha_val/ann_vol if ann_vol != 0 else 0:.2f}", help="Active return per unit of active risk.")
 
     # --- TAB 2: STRUCTURE ---
     with tab2:
@@ -233,7 +236,6 @@ if data is not None:
             t_col1, t_col2, t_col3 = st.columns(3)
             s_p = t_col1.number_input("Short MA", 10); m_p = t_col2.number_input("Mid MA", 50); l_p = t_col3.number_input("Long MA", 200)
             df_f['S'], df_f['M'], df_f['L'] = df_f['Close'].rolling(s_p).mean(), df_f['Close'].rolling(m_p).mean(), df_f['Close'].rolling(l_p).mean()
-            # Logic: Buy if Short > Mid while both are below Long (early recovery)
             df_f['Signal'] = np.where((df_f['S'] > df_f['M']) & (df_f['S'] < df_f['L']), 1, 0)
         elif strat_choice == "RSI":
             r_p = st.slider("RSI Period", 7, 30, 14)
@@ -243,12 +245,11 @@ if data is not None:
             fast = st.number_input("Fast SMA", 20); slow = st.number_input("Slow SMA", 50)
             df_f['Signal'] = np.where(df_f['Close'].rolling(fast).mean() > df_f['Close'].rolling(slow).mean(), 1, 0)
 
-        # Result Summary Table
         s_ret_fore = df_f['Signal'].shift(1) * df_f['Close'].pct_change()
         st.subheader("Forecasted Performance Table (1-Year)")
         st.table(pd.DataFrame({
             "Metric": ["Annualized Return", "Annualized Risk", "Sharpe Value", "No. of Trades"],
-            "Forecast": [f"{s_ret_fore.mean()*252:.2%}", f"{s_ret_fore.std()*np.sqrt(252):.2%}", f"{(s_ret_fore.mean()*252)/(s_ret_fore.std()*np.sqrt(252)):.2f}", int(df_f['Signal'].diff().abs().sum())]
+            "Forecast": [f"{s_ret_fore.mean()*252:.2%}", f"{s_ret_fore.std()*np.sqrt(252):.2%}", f"{(s_ret_fore.mean()*252)/(s_ret_fore.std()*np.sqrt(252)) if s_ret_fore.std()!=0 else 0:.2f}", int(df_f['Signal'].diff().abs().sum())]
         }))
         
         fig_f = go.Figure()
