@@ -7,7 +7,6 @@ Original file is located at
     https://colab.research.google.com/drive/1gkmpljoOIvjbKUjTAM0G8OCGRZI-inXT
 """
 
-
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -86,7 +85,7 @@ with tab_sel:
     rf_rate = rf_rate_input / 100
     st.caption("*Justification: The benchmark hurdle rate for calculating CAPM and Sharpe ratio.*")
     
-    if st.button("Start Analysis ➡"):
+    if st.button("Start Analysis ➡", key="start_btn"):
         st.success("Configuration saved! Please click on the **Analysis & Valuation** tab above.")
 
 # --- DATA ENGINE ---
@@ -116,9 +115,8 @@ if data is not None:
         st.title(f"Analysis & Valuation: {sel_stock}")
         st.write(f"**LTP:** ₹{ltp:,.2f} | **As of:** {ltp_time}")
         
-        # Calculations
         cagr = (data[sel_stock].iloc[-1] / data[sel_stock].iloc[0])**(1/lookback_yrs) - 1
-        sharpe = (ann_ret_raw - rf_rate) / ann_vol
+        sharpe = (ann_ret_raw - rf_rate) / ann_vol if ann_vol != 0 else 0
         downside_dev = returns[returns < 0].std() * np.sqrt(252)
         sortino = (ann_ret_raw - rf_rate) / downside_dev if downside_dev != 0 else 0
         dd = (data[sel_stock] - data[sel_stock].cummax()) / data[sel_stock].cummax()
@@ -131,71 +129,58 @@ if data is not None:
         win_rate = len(returns[returns > 0]) / len(returns)
         profit_factor = abs(returns[returns > 0].sum() / returns[returns < 0].sum())
 
-        # Alpha Models
+        st.subheader("Multi-Factor Valuation Alphas")
         capm_exp = rf_rate + beta * (mkt_rets.mean()*252 - rf_rate)
         ff_exp = rf_rate + (beta * 0.08) + (returns.rolling(252).corr(data['^NSEBANK'].pct_change()).iloc[-1] * 0.02)
         apt_exp = capm_exp + 0.015
 
-        st.subheader("Multi-Factor Valuation Alphas")
         v_cols = st.columns(3)
         def draw_alpha(col, name, exp, actual, help_t):
             al = actual - exp
             vc = "status-undervalued" if al > 0 else "status-overvalued"
-            col.markdown(f"""<div class='valuation-card' title='{help_t}'><small>{name}</small><h3>Exp: {exp:.2%}</h3><p>Actual: {actual:.2%}</p>
+            col.markdown(f"""<div class='valuation-card' title='{help_t}'><small>{name}</small><h3>Exp: {exp:.2%}</h3>
                         <p class='{vc}'>Alpha: {al:+.2%} ({"Undervalued" if al > 0 else "Overvalued"})</p></div>""", unsafe_allow_html=True)
-        draw_alpha(v_cols[0], "CAPM Model", capm_exp, cagr, "Market-risk adjusted expectation.")
+        draw_alpha(v_cols[0], "CAPM Model", capm_exp, cagr, "Beta-adjusted market benchmark.")
         draw_alpha(v_cols[1], "4-Factor Model", ff_exp, cagr, "Includes Size and Momentum proxies.")
-        draw_alpha(v_cols[2], "APT Model", apt_exp, cagr, "Arbitrage Pricing Theory macro-proxy.")
+        draw_alpha(v_cols[2], "APT Model", apt_exp, cagr, "Arbitrage Pricing Theory sectors proxy.")
 
         st.divider()
         st.subheader("Advanced Statistics & Ratios")
         r1, r2, r3, r4 = st.columns(4)
-        r1.metric("CAGR", f"{cagr:.2%}", help="Compound Annual Growth Rate. Mean annual growth.")
-        r2.metric("Sharpe Ratio", f"{sharpe:.2f}", help="Return per unit of total risk. >1 is good.")
-        r3.metric("Sortino Ratio", f"{sortino:.2f}", help="Return per unit of downside risk.")
-        r4.metric("Calmar Ratio", f"{calmar:.2f}", help="Annualized return vs Max Drawdown.")
+        r1.metric("CAGR", f"{cagr:.2%}", help="Compound Annual Growth Rate.")
+        r2.metric("Sharpe Ratio", f"{sharpe:.2f}", help="Return/Risk ratio.")
+        r3.metric("Sortino Ratio", f"{sortino:.2f}", help="Downside risk adjusted return.")
+        r4.metric("Calmar Ratio", f"{calmar:.2f}", help="Annual return vs Max Drawdown.")
 
         r5, r6, r7, r8 = st.columns(4)
-        r5.metric("Max Drawdown", f"{max_dd:.2%}", help="Worst peak-to-trough decline.")
-        r6.metric("Avg Drawdown", f"{dd.mean():.2%}", help="Average decline from previous peaks.")
-        r7.metric("Ulcer Index", f"{ulcer_index:.2f}", help="Stress of drawdowns. Lower is better.")
-        r8.metric("Ann. Volatility", f"{ann_vol:.2%}", help="Standard deviation of returns.")
-
-        r9, r10, r11, r12 = st.columns(4)
-        r9.metric("VaR (95%)", f"{var_95:.2%}", help="95% Daily Value at Risk.")
-        r10.metric("CVaR (95%)", f"{cvar_95:.2%}", help="Expected Shortfall in worst 5% cases.")
-        r11.metric("Skewness", f"{skew(returns):.2f}", help="Return distribution asymmetry.")
-        r12.metric("Kurtosis", f"{kurtosis(returns):.2f}", help="Fat-tail risk measurement.")
-
-        r13, r14, r15, r16 = st.columns(4)
-        r13.metric("Profit Factor", f"{profit_factor:.2f}", help="Gross Profit / Gross Loss.")
-        r14.metric("Win Rate", f"{win_rate:.2%}", help="Percentage of positive days.")
-        r15.metric("Beta", f"{beta:.2f}", help="Market sensitivity index.")
-        r16.metric("Gain-to-Pain", f"{returns.sum()/abs(returns[returns<0].sum()):.2f}", help="Sum of returns / sum of losses.")
+        r5.metric("Max Drawdown", f"{max_dd:.2%}", help="Peak-to-trough decline.")
+        r6.metric("Avg Drawdown", f"{dd.mean():.2%}", help="Mean decline from peaks.")
+        r7.metric("Ulcer Index", f"{ulcer_index:.2f}", help="Measures drawdown stress.")
+        r8.metric("Ann. Volatility", f"{ann_vol:.2%}", help="Sigma (Standard Deviation).")
 
         st.markdown("---")
         n1, n2, n3 = st.columns(3)
-        if n1.button("⬅ Previous: Selection"): st.info("Please click the 'Selection' tab at the top.")
-        if n2.button("🏠 Home"): st.info("Please click the 'Selection' tab at the top.")
-        if n3.button("Next: Structure ➡"): st.info("Please click the 'Structure' tab at the top.")
+        if n1.button("⬅ Previous: Selection", key="nav_sel_1"): st.info("Click 'Selection' tab.")
+        if n2.button("🏠 Home", key="nav_home_1"): st.info("Click 'Selection' tab.")
+        if n3.button("Next: Structure ➡", key="nav_struct_1"): st.info("Click 'Structure' tab.")
 
     # --- TAB 2: STRUCTURE ---
     with tab2:
-        st.title("Structural DNA")
+        st.title("Structural DNA & Trend Analysis")
         data['MA200'] = data[sel_stock].rolling(200).mean()
         st.metric("Trend vs 200-MA", "✅ BULLISH" if ltp > data['MA200'].iloc[-1] else "❌ BEARISH")
         res, supp = data[sel_stock].tail(22).max(), data[sel_stock].tail(22).min()
         fig_sr = go.Figure()
         fig_sr.add_trace(go.Scatter(x=data.tail(252).index, y=data[sel_stock].tail(252), name="Price"))
-        fig_sr.add_hline(y=res, line_dash="dash", line_color="green", annotation_text="Resistance")
-        fig_sr.add_hline(y=supp, line_dash="dash", line_color="red", annotation_text="Support")
+        fig_sr.add_hline(y=res, line_dash="dash", line_color="green", annotation_text="Resis")
+        fig_sr.add_hline(y=supp, line_dash="dash", line_color="red", annotation_text="Supp")
         st.plotly_chart(fig_sr, use_container_width=True)
 
         st.markdown("---")
         n4, n5, n6 = st.columns(3)
-        if n4.button("⬅ Back: Valuation"): st.info("Click 'Analysis & Valuation' above.")
-        if n5.button("🏠 Home Gateway"): st.info("Click 'Selection' above.")
-        if n6.button("Next: Strategy ➡"): st.info("Click 'Strategy' above.")
+        if n4.button("⬅ Back: Valuation", key="nav_val_2"): st.info("Click 'Analysis & Valuation' tab.")
+        if n5.button("🏠 Home", key="nav_home_2"): st.info("Click 'Selection' tab.")
+        if n6.button("Next: Strategy ➡", key="nav_strat_2"): st.info("Click 'Strategy' tab.")
 
     # --- TAB 3: STRATEGY ---
     with tab3:
@@ -204,8 +189,7 @@ if data is not None:
         am = arch_model(ret_g, vol='Garch', p=1, q=1, dist='t')
         res_g = am.fit(disp="off")
         
-        with st.expander("🔍 GARCH (1,1) Statistical Summary"):
-            st.text(res_g.summary())
+        with st.expander("🔍 GARCH (1,1) Model Summary"): st.text(res_g.summary())
         
         fig_v = go.Figure()
         fig_v.add_trace(go.Scatter(x=res_g.conditional_volatility.index, y=res_g.conditional_volatility, name="Shock Vol", line=dict(color='orange')))
@@ -213,7 +197,7 @@ if data is not None:
         
 
         st.divider()
-        sc = st.selectbox("Methodology", ["Triple Golden Cross", "RSI", "SMA Crossover"])
+        sc = st.selectbox("Strategy", ["Triple Golden Cross", "RSI", "SMA Crossover"])
         f_vol = np.sqrt(res_g.forecast(horizon=252).variance.values[-1, :]) / 100
         p_f = [ltp]; np.random.seed(42)
         for i in range(252): p_f.append(p_f[-1] * np.exp(returns.mean() + f_vol[i] * np.random.standard_normal()))
@@ -230,16 +214,15 @@ if data is not None:
         fig_f = go.Figure()
         fig_f.add_trace(go.Scatter(x=df_f.index, y=df_f['Close'], name="Forecast"))
         buys = df_f[df_f['Signal'].diff() == 1]; sells = df_f[df_f['Signal'].diff() == -1]
-        fig_f.add_trace(go.Scatter(x=buys.index, y=buys['Close'], mode='markers', marker=dict(symbol='triangle-up', size=15, color='green')))
-        fig_f.add_trace(go.Scatter(x=sells.index, y=sells['Close'], mode='markers', marker=dict(symbol='triangle-down', size=15, color='red')))
+        fig_f.add_trace(go.Scatter(x=buys.index, y=buys['Close'], mode='markers', name="Buy", marker=dict(symbol='triangle-up', size=15, color='green')))
+        fig_f.add_trace(go.Scatter(x=sells.index, y=sells['Close'], mode='markers', name="Sell", marker=dict(symbol='triangle-down', size=15, color='red')))
         st.plotly_chart(fig_f, use_container_width=True)
-        
 
         st.markdown("---")
         n7, n8, n9 = st.columns(3)
-        if n7.button("⬅ Previous: Structure"): st.info("Click 'Structure' above.")
-        if n8.button("🏠 Home"): st.info("Click 'Selection' above.")
-        if n9.button("Next: Credit Risk ➡"): st.info("Click 'Credit Risk' above.")
+        if n7.button("⬅ Previous: Structure", key="nav_struct_3"): st.info("Click 'Structure' tab.")
+        if n8.button("🏠 Home", key="nav_home_3"): st.info("Click 'Selection' tab.")
+        if n9.button("Next: Credit Risk ➡", key="nav_credit_3"): st.info("Click 'Credit Risk' tab.")
 
     # --- TAB 4: CREDIT RISK ---
     with tab4:
@@ -256,7 +239,7 @@ if data is not None:
         
         m_frame = st.radio("Framework", ["Merton Model", "KMV Model"])
         barr = (st_d + 0.5 * lt_d) if m_frame == "KMV Model" else tot_d
-        barr = st.number_input("Barrier (Cr ₹)", value=float(barr) if barr > 0 else 5000.0)
+        barr = st.number_input("Default Barrier", value=float(barr) if barr > 0 else 5000.0)
         
         def solve_m(E, se, L, r, T):
             def eq(p):
@@ -266,23 +249,22 @@ if data is not None:
 
         try:
             va, sa = solve_m(mcap, ann_vol, barr, rf_rate, 1.0)
-            dd = (np.log(va/barr) + (rf_rate - 0.5 * sa**2)) / sa; pd_v = norm.cdf(-dd)
-            
+            dd_v = (np.log(va/barr) + (rf_rate - 0.5 * sa**2)) / sa; pd_v = norm.cdf(-dd_v)
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Distance to Default (DD)", f"{dd:.2f} σ")
+            c1.metric("Distance to Default (DD)", f"{dd_v:.2f} σ")
             c2.metric("Prob. of Default (PD)", f"{pd_v:.4%}")
             c3.metric("Asset Value (V)", f"₹{va:,.0f} Cr", help="Implied Market Value of total firm assets.")
             c4.metric("Asset Volatility (σV)", f"{sa:.2%}", help="Volatility of firm assets.")
             
             st.divider()
-            st.write(f"**Interpretation:** Firm is **{dd:.2f} standard deviations** from bankruptcy. Implied Asset Value is ₹{va:,.0f} Cr.")
+            st.write(f"**Interpretation:** Firm is **{dd_v:.2f} standard deviations** from bankruptcy. Implied Asset Value is ₹{va:,.0f} Cr.")
         except: st.error("Solver Error.")
         
 
         st.markdown("---")
         n10, n11 = st.columns(2)
-        if n10.button("⬅ Previous: Strategy"): st.info("Click 'Strategy' above.")
-        if n11.button("🏠 Home Gate"): st.info("Click 'Selection' above.")
+        if n10.button("⬅ Previous: Strategy", key="nav_strat_4"): st.info("Click 'Strategy' tab.")
+        if n11.button("🏠 Home", key="nav_home_4"): st.info("Click 'Selection' tab.")
 
 else: st.error("Data Load Error. Ensure Ticker is correct.")
 
