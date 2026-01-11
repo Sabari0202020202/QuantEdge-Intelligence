@@ -49,7 +49,7 @@ rf_rate = st.sidebar.number_input("Risk Free Rate %", value=7.1) / 100
 # --- DATA ENGINE ---
 @st.cache_data
 def get_full_data(ticker, yrs):
-    start = datetime.now() - timedelta(days=yrs*365 + 365) # Buffer for 200MA
+    start = datetime.now() - timedelta(days=yrs*365 + 365) 
     df = yf.download([ticker, "^NSEI", "^NSEBANK"], start=start.strftime('%Y-%m-%d'))['Close']
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(1)
@@ -62,29 +62,24 @@ if data is not None:
     # INITIALIZE ALL FOUR TABS
     tab1, tab2, tab3, tab4 = st.tabs(["💎 Valuation & Market", "🏗️ Structural Strength", "🔮 Strategy Playbook", "📉 Credit Risk"])
 
-    # --- TAB 1: VALUATION ENGINE ---
+    # --- TAB 1 (Your Original Code) ---
     with tab1:
         st.title(f"Valuation: {sel_stock}")
         returns = data.pct_change().dropna()
         avg_ann_ret = returns[sel_stock].mean() * 252
         ann_risk = returns[sel_stock].std() * np.sqrt(252)
         sharpe = (avg_ann_ret - rf_rate) / ann_risk if ann_risk != 0 else 0
-        
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Avg Annual Return", f"{avg_ann_ret:.2%}")
         m2.metric("Annualized Risk", f"{ann_risk:.2%}")
         m3.metric("Sharpe Ratio", f"{sharpe:.2f}")
-        
-        # Valuation Models
         beta = (returns.cov().loc[sel_stock, "^NSEI"] * 252) / (returns["^NSEI"].var() * 252)
         mkt_ret = returns["^NSEI"].mean() * 252
-        
         capm_exp = rf_rate + beta * (mkt_ret - rf_rate)
         beta_bank = returns[sel_stock].rolling(len(returns)).corr(returns['^NSEBANK']).iloc[-1]
         mom_factor = returns[sel_stock].tail(252).sum() 
         ff_exp = rf_rate + (beta * 0.08) + (beta_bank * 0.02) + (mom_factor * 0.04)
         apt_exp = rf_rate + (beta * 0.09) + (beta_bank * 0.03)
-
         st.divider()
         v1, v2, v3 = st.columns(3)
         def draw_val(name, exp, actual):
@@ -93,12 +88,9 @@ if data is not None:
             st.markdown(f"""<div class='valuation-card'><small>{name}</small><h3>Exp: {exp:.2%}/yr</h3>
                         <p>Alpha: <span class='{v_class}'>{alpha:+.2%}</span></p>
                         <p class='{v_class}'>{"UNDERVALUED" if alpha > 0 else "OVERVALUED"}</p></div>""", unsafe_allow_html=True)
-        
         with v1: draw_val("CAPM Model", capm_exp, avg_ann_ret)
         with v2: draw_val("4-Factor Model", ff_exp, avg_ann_ret)
         with v3: draw_val("APT Model", apt_exp, avg_ann_ret)
-        
-        # Performance Graph
         cum_ret = (1 + returns).cumprod()
         fig_cum = go.Figure()
         fig_cum.add_trace(go.Scatter(x=cum_ret.index, y=cum_ret[sel_stock], name="Stock", line=dict(color='#2563eb', width=3)))
@@ -106,20 +98,18 @@ if data is not None:
         fig_cum.update_layout(template="plotly_white", height=400, title="Growth vs Nifty 50")
         st.plotly_chart(fig_cum, use_container_width=True)
 
-    # --- TAB 2: STRUCTURAL STRENGTH ---
+    # --- TAB 2 (Your Original Code) ---
     with tab2:
         st.title(f"Structural DNA: {sel_stock}")
         data_t2 = data.copy()
         data_t2['MA50'] = data_t2[sel_stock].rolling(50).mean()
         data_t2['MA200'] = data_t2[sel_stock].rolling(200).mean()
         last_p = data_t2[sel_stock].iloc[-1]
-        
         st.subheader("1. The Institutional Filter")
         c1, c2, c3 = st.columns(3)
         with c1: st.metric("Trend vs 200-MA", "✅ BULLISH" if last_p > data_t2['MA200'].iloc[-1] else "❌ BEARISH")
         with c2: st.metric("50/200 MA Cross", "🔥 GOLDEN" if data_t2['MA50'].iloc[-1] > data_t2['MA200'].iloc[-1] else "❄️ DEATH")
         with c3: st.metric("Dist. 52W High", f"{((last_p / data_t2[sel_stock].max()) - 1):.2%}")
-
         st.subheader("2. Price Memory (Support/Resistance)")
         res = data_t2[sel_stock].tail(22).max()
         supp = data_t2[sel_stock].tail(22).min()
@@ -129,7 +119,6 @@ if data is not None:
         fig_sr.add_hline(y=supp, line_dash="dash", line_color="red", annotation_text="Supp")
         fig_sr.update_layout(template="plotly_white", height=400)
         st.plotly_chart(fig_sr, use_container_width=True)
-
         st.subheader("3. Relative Strength & 4. Drawdowns")
         rs_col, dd_col = st.columns(2)
         with rs_col:
@@ -141,28 +130,21 @@ if data is not None:
             dd = (data_t2[sel_stock] - data_t2[sel_stock].cummax()) / data_t2[sel_stock].cummax()
             st.metric("Max Period Drawdown", f"{dd.min():.2%}")
 
-    # --- TAB 3: STRATEGY & FORECAST ---
+    # --- TAB 3 (Your Original Code) ---
     with tab3:
         st.header("🔮 Forward Strategy Playbook")
-        
-        # GARCH Section
         ret_g = 100 * data[sel_stock].pct_change().dropna()
         am = arch_model(ret_g, vol='Garch', p=1, q=1, dist='t')
         res_g = am.fit(disp="off")
         f_vol = np.sqrt(res_g.forecast(horizon=252).variance.values[-1, :]) / 100
-        
-        # 1Y Price Forecast
         last_p = data[sel_stock].iloc[-1]
         drift = ret_g.mean() / 100
         np.random.seed(42)
         p_path = [last_p]
         for i in range(252): p_path.append(p_path[-1] * np.exp(drift + f_vol[i] * np.random.standard_normal()))
         df_f = pd.DataFrame({'Close': p_path[1:]}, index=[data.index[-1] + timedelta(days=i) for i in range(1, 253)])
-
-        # STRATEGY CUSTOMIZATION
         st.subheader("Strategy Config & Explanation")
         strat = st.selectbox("Methodology", ["RSI", "SMA Crossover", "Triple Golden Cross"])
-        
         def apply_strat(df, s):
             df = df.copy()
             if s == "RSI":
@@ -174,8 +156,7 @@ if data is not None:
                 df['RSI'] = 100 - (100 / (1 + (gain/loss)))
                 df['Signal'] = np.where(df['RSI'] < 30, 1, 0)
             elif s == "SMA Crossover":
-                p1 = st.number_input("Fast SMA", value=20)
-                p2 = st.number_input("Slow SMA", value=50)
+                p1 = st.number_input("Fast SMA", value=20); p2 = st.number_input("Slow SMA", value=50)
                 st.info("**Momentum Crossover:** Buying when short-term trend rises above long-term trend.")
                 df['F'] = df['Close'].rolling(p1).mean(); df['S'] = df['Close'].rolling(p2).mean()
                 df['Signal'] = np.where(df['F'] > df['S'], 1, 0)
@@ -184,31 +165,20 @@ if data is not None:
                 ps, pm, pl = t1.number_input("Short", 10), t2.number_input("Mid", 50), t3.number_input("Long", 200)
                 st.info("**Cluster Logic:** Buy only when Short MA crosses Mid MA *below* the Long curve (early trend). Sell when Short crosses Mid *above* the Long curve.")
                 df['MA_S'], df['MA_M'], df['MA_L'] = df['Close'].rolling(ps).mean(), df['Close'].rolling(pm).mean(), df['Close'].rolling(pl).mean()
-                # User's Specific Logic
-                df['Signal'] = 0
-                buy_cond = (df['MA_S'] > df['MA_M']) & (df['MA_S'].shift(1) < df['MA_M'].shift(1)) & (df['MA_S'] < df['MA_L'])
+                df['Signal'] = 0; buy_cond = (df['MA_S'] > df['MA_M']) & (df['MA_S'].shift(1) < df['MA_M'].shift(1)) & (df['MA_S'] < df['MA_L'])
                 sell_cond = (df['MA_S'] < df['MA_M']) & (df['MA_S'].shift(1) > df['MA_M'].shift(1)) & (df['MA_S'] > df['MA_L'])
-                # Applying persistence
                 curr_sig = 0
                 for i in range(len(df)):
                     if buy_cond.iloc[i]: curr_sig = 1
                     elif sell_cond.iloc[i]: curr_sig = 0
                     df.iloc[i, df.columns.get_loc('Signal')] = curr_sig
-            
             df['Strat_Ret'] = df['Signal'].shift(1) * df['Close'].pct_change()
             return df
-
         full_bt = pd.concat([data[[sel_stock]].tail(252).rename(columns={sel_stock:'Close'}), df_f])
         res_bt = apply_strat(full_bt, strat).loc[df_f.index]
-
-        # Results Table
         st.subheader("Performance Summary (Forecasted Year)")
-        ret_f = res_bt['Strat_Ret'].mean() * 252
-        risk_f = res_bt['Strat_Ret'].std() * np.sqrt(252)
-        st.table(pd.DataFrame({"Metric": ["Return", "Risk", "Sharpe", "Trades"], 
-                               "Value": [f"{ret_f:.2%}", f"{risk_f:.2%}", f"{(ret_f/risk_f if risk_f!=0 else 0):.2f}", int(res_bt['Signal'].diff().abs().sum())]}))
-        
-        # Forecast Signal Chart
+        ret_f = res_bt['Strat_Ret'].mean() * 252; risk_f = res_bt['Strat_Ret'].std() * np.sqrt(252)
+        st.table(pd.DataFrame({"Metric": ["Return", "Risk", "Sharpe", "Trades"], "Value": [f"{ret_f:.2%}", f"{risk_f:.2%}", f"{(ret_f/risk_f if risk_f!=0 else 0):.2f}", int(res_bt['Signal'].diff().abs().sum())]}))
         fig_f = go.Figure()
         fig_f.add_trace(go.Scatter(x=res_bt.index, y=res_bt['Close'], name="Future Price", line=dict(color='#94a3b8')))
         buys = res_bt[res_bt['Signal'].diff() == 1]; sells = res_bt[res_bt['Signal'].diff() == -1]
@@ -216,25 +186,16 @@ if data is not None:
         fig_f.add_trace(go.Scatter(x=sells.index, y=sells['Close'], mode='markers', name='SELL', marker=dict(symbol='triangle-down', size=15, color='red')))
         st.plotly_chart(fig_f, use_container_width=True)
 
-else: st.error("Data fetch failed. Verify ticker or internet.")
-
-    
-    # --- CONTINUATION OF PREVIOUS SCRIPT ---
-    # Ensure tab4 is added to the initial tabs definition:
-    # tab1, tab2, tab3, tab4 = st.tabs(["💎 Valuation", "🏗️ Structure", "🔮 Strategy", "📉 Credit Risk"])
-    
+    # --- TAB 4 (Integrated into the main logic) ---
     with tab4:
         st.header("📉 Credit Risk: Structural Probability of Default")
         st.info("""**Strategic Insight:** This model uses the Merton/KMV framework to assess if the market 
         is underestimating the risk of insolvency. It treats equity as a call option on the firm's total assets.""")
-    
+
         # 1. PARAMETER SELECTION
         col_p1, col_p2 = st.columns(2)
         with col_p1:
             model_type = st.radio("Select Model", ["Merton Model", "KMV Model (Proxy)"])
-            # Debt assumption for Indian Large-caps (Total Liabilities)
-            # In a production app, this should be scraped from balance sheets. 
-            # Here we allow user input for the 'Default Barrier' (Short term + 0.5 * Long term debt)
             debt_val = st.number_input("Face Value of Debt (in Cr ₹)", value=50000.0)
             t_horizon = st.slider("Time Horizon (Years)", 1.0, 5.0, 1.0)
         
@@ -244,69 +205,55 @@ else: st.error("Data fetch failed. Verify ticker or internet.")
                 st.write("Calculates default risk based on a fixed debt barrier and normal distribution of asset returns.")
             else:
                 st.write("KMV approach uses a 'Default Point' (Short-term debt + 50% Long-term debt) to calculate Expected Default Frequency (EDF).")
-    
+
         # 2. DATA CALCULATIONS
-        # Get current equity value (Market Cap)
         ticker_info = yf.Ticker(sel_stock).info
         equity_val = ticker_info.get('marketCap', 1) / 10000000 # Convert to Cr
-        
-        # Calculate Equity Volatility (Annualized)
         eq_returns = data[sel_stock].pct_change().dropna()
         sigma_e = eq_returns.std() * np.sqrt(252)
-        
-        # MERTON SYSTEM OF EQUATIONS
-        # We solve for Asset Value (V) and Asset Volatility (sigma_v)
+
         def merton_equations(vars):
             V, sigma_v = vars
             d1 = (np.log(V/debt_val) + (rf_rate + 0.5 * sigma_v**2) * t_horizon) / (sigma_v * np.sqrt(t_horizon))
             d2 = d1 - sigma_v * np.sqrt(t_horizon)
-            
-            # Equation 1: Black-Scholes for Equity
             eq1 = V * norm.cdf(d1) - debt_val * np.exp(-rf_rate * t_horizon) * norm.cdf(d2) - equity_val
-            # Equation 2: Relationship between Equity and Asset Volatility
             eq2 = (norm.cdf(d1) * V / equity_val) * sigma_v - sigma_e
             return [eq1, eq2]
-    
-        # Initial Guesses
+
         v_guess = equity_val + debt_val
         sigma_v_guess = sigma_e * (equity_val / v_guess)
         
         try:
             sol = fsolve(merton_equations, [v_guess, sigma_v_guess])
             v_asset, sigma_asset = sol[0], sol[1]
-    
-            # 3. OUTPUTS: DD and PD
             d1 = (np.log(v_asset/debt_val) + (rf_rate + 0.5 * sigma_asset**2) * t_horizon) / (sigma_asset * np.sqrt(t_horizon))
             d2 = d1 - sigma_asset * np.sqrt(t_horizon)
-            
             distance_to_default = d2
             prob_of_default = norm.cdf(-distance_to_default)
-    
-            # UI OUTPUT CARDS
+
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Distance to Default (DD)", f"{distance_to_default:.2f} σ")
             c2.metric("Prob. of Default (PD)", f"{prob_of_default:.4%}")
             c3.metric("Asset Value (Cr)", f"₹{v_asset:,.0f}")
             c4.metric("Asset Volatility", f"{sigma_asset:.2%}")
-    
+
             st.divider()
-    
-            # 4. STRATEGIC EXPLANATION
             st.subheader("💡 Strategic Credit Analysis")
-            
             exp1, exp2, exp3 = st.columns(3)
             with exp1:
                 st.markdown(f"**PD / EDF ({prob_of_default:.2%})**")
-                st.write("Is the credit mispriced? If PD is rising while the stock price stays flat, a 'Credit-Equity Divergence' is occurring. This is often a lead indicator of a crash.")
-            
+                st.write("Is the credit mispriced? If PD is rising while the stock price stays flat, a 'Credit-Equity Divergence' is occurring.")
             with exp2:
                 st.markdown(f"**Distance to Default ({distance_to_default:.2f})**")
-                st.write(f"The company is **{distance_to_default:.2f} standard deviations** away from insolvency. A DD below 2.0 is a 'ticking bomb' for long-term investors.")
-                
+                st.write(f"The company is **{distance_to_default:.2f} standard deviations** away from insolvency.")
             with exp3:
                 st.markdown(f"**Asset Volatility ({sigma_asset:.2%})**")
-                st.write("This measures the risk of the business operations, independent of leverage. High asset vol means the buffer can evaporate rapidly.")
-    
+                st.write("Measures risk of business operations. High asset vol means the buffer can evaporate rapidly.")
         except Exception as e:
-            st.error(f"Could not converge on a solution: {e}. This usually happens if the debt levels entered are too high relative to equity.")
+            st.error(f"Could not converge: {e}")
+
+else:
+    st.error("Data fetch failed. Verify ticker or internet.")
+
+
 
