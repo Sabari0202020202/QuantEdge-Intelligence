@@ -60,7 +60,7 @@ data, listing_date = get_full_data(sel_stock, lookback)
 
 if data is not None:
     # INITIALIZE ALL THREE TABS
-    tab1, tab2, tab3 = st.tabs(["💎 Valuation & Market", "🏗️ Structural Strength", "🔮 Strategy Playbook"])
+    tab1, tab2, tab3, tab4 = st.tabs(["💎 Valuation & Market", "🏗️ Structural Strength", "🔮 Strategy Playbook", "📉 Credit Risk"])
 
     # --- TAB 1: VALUATION ENGINE ---
     with tab1:
