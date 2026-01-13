@@ -226,7 +226,7 @@ if res is not None:
             draw_v(v3, "APT Model", apt_exp, cagr, "Macroeconomic factor proxy.")
 
             st.divider()
-            st.subheader("19-Point Advanced Statistics & Ratios")
+            st.subheader("16-Point Advanced Statistics & Ratios")
             r_cols = st.columns(4)
             r_cols[0].metric("Sharpe Ratio", f"{sharpe:.2f}")
             r_cols[1].metric("Sortino Ratio", f"{sortino:.2f}")
