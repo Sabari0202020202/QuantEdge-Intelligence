@@ -19,7 +19,7 @@ from scipy.stats import norm, skew, kurtosis, probplot
 from scipy.optimize import fsolve
 
 # --- LIGHT THEME UI & STYLING ---
-st.set_page_config(page_title="Sabarimayur's 360° Stock Strategy & Valuation Suite", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="Sabarimayurnath's 360° Stock Strategy & Valuation Suite", layout="wide", page_icon="🛡️")
 
 st.markdown("""
 <style>
@@ -62,6 +62,8 @@ with st.sidebar:
     st.markdown("### **Developer Profile**")
     st.markdown("**Name:** *Sabarimayurnath U*")
     st.markdown("**Email:** `u.sabarimayurnath@gmail.com`")
+    st.markdown("MBA Finance")
+    st.markdown("NMIMS Bengaluru")
     st.markdown(f'<a href="https://www.linkedin.com/in/sabarimayurnath-u/" target="_blank" class="linkedin-box">Connect on LinkedIn</a>', unsafe_allow_html=True)
     st.markdown("---")
     st.caption("© 2026 QuantPro Intelligence")
