@@ -53,9 +53,9 @@ with st.sidebar:
     * **Visual Analysis:** *Interactive Candlestick, BB, & Volume Charts.*
     * **Multi-Factor Valuation:** *Alpha analysis using CAPM, 4-Factor, and APT.*
     * **Volatility Engine:** *GARCH(1,1), News Impact Curve, & 5-Day Forecasts.*
-    * **Strategy Backtester:** *Triple-MA and RSI Simulation.*
-    * **Market Risk:** *Rolling Beta, VaR/CVaR, Stress Testing.*
-    * **Credit Risk:** *Merton/KMV Probability of Default.*
+    * **Strategy Backtester:** *Triple-MA and RSI Simulation with Buy/Sell Signals.*
+    * **Market Risk:** *Academic, Historic, & Industry VaR with Period selection.*
+    * **Credit Risk:** *Merton/KMV Probability of Default Solver.*
     * **Comparison:** *Multi-stock Ranking & Winner Logic.*
     """)
     st.markdown("---")
@@ -130,7 +130,7 @@ def get_simple_data(ticker, start_date):
     except: return pd.DataFrame()
 
 # --- TAB SETUP ---
-tab_sel, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab_sel, tab1, tab2, tab3, tab5, tab4, tab6 = st.tabs([
     " 🔍 Selection", 
     " 💎 Analysis & Valuation", 
     " 🏗️ Structure", 
@@ -179,12 +179,12 @@ else:
     days_hist = (df.index[-1] - df.index[0]).days
     cagr = ((df['Close'].iloc[-1] / df['Close'].iloc[0]) ** (365/days_hist)) - 1
 
-    # --- TAB 1: ANALYSIS & VALUATION (Restored Charts) ---
+    # --- TAB 1: ANALYSIS & VALUATION ---
     with tab1:
         st.title(f"Analysis & Valuation: {sel_stock}")
         st.write(f"**LTP:** ₹{master_data['ltp']:,.2f}")
 
-        # 1. Technical Charts (Restored)
+        # 1. Technical Charts
         st.subheader("Price Action & Technicals")
         df['SMA_50'] = df['Close'].rolling(50).mean()
         df['BB_Mid'] = df['Close'].rolling(20).mean()
@@ -263,9 +263,9 @@ else:
         fig_sr.add_hline(y=df['Close'].tail(22).min(), line_dash="dash", line_color="red", annotation_text="Sup")
         st.plotly_chart(fig_sr, use_container_width=True)
 
-    # --- TAB 3: STRATEGY (Restored Forecasts) ---
+    # --- TAB 3: STRATEGY (UPDATED) ---
     with tab3:
-        st.title("GARCH Volatility & Strategy")
+        st.title("GARCH Volatility & Strategy Backtester")
         ret_g = 100 * returns
         am = arch_model(ret_g, vol='Garch', p=1, q=1, dist='t')
         res_g = am.fit(disp="off")
@@ -286,19 +286,24 @@ else:
             fig_nic = go.Figure(go.Scatter(x=nic_x, y=nic_y, line=dict(color='firebrick')))
             st.plotly_chart(fig_nic, use_container_width=True)
 
-        # 2. 5-Day Forecast (Restored)
-        st.subheader("Short-Term Forecast (Next 5 Days)")
-        f_cast = res_g.forecast(horizon=5)
-        v_cast = np.sqrt(f_cast.variance.iloc[-1])
-        fig_fc = px.bar(x=[f"Day {i+1}" for i in range(5)], y=v_cast, title="Predicted Volatility Shock", labels={'y':'Volatility %'})
-        st.plotly_chart(fig_fc, use_container_width=True)
-
-        # 3. Backtester
+        # 2. Backtester with Inputs & Summary
         st.divider()
-        st.subheader("Strategy Simulation (1-Year)")
-        strat = st.selectbox("Strategy", ["Triple Golden Cross", "RSI", "SMA Crossover"])
+        st.subheader("Strategy Simulation (1-Year Forecast)")
         
-        # Sim Data
+        strat_col1, strat_col2 = st.columns([1, 2])
+        with strat_col1:
+            strat = st.selectbox("Strategy Methodology", ["Triple Golden Cross", "RSI", "SMA Crossover"])
+            if strat == "Triple Golden Cross":
+                s_p = st.number_input("Short MA", 10)
+                m_p = st.number_input("Mid MA", 50)
+                l_p = st.number_input("Long MA", 200)
+            elif strat == "RSI":
+                r_p = st.slider("RSI Period", 7, 30, 14)
+            else:
+                s_sma = st.number_input("Fast MA", 20)
+                l_sma = st.number_input("Slow MA", 50)
+
+        # Simulation
         sim_vol = np.sqrt(res_g.forecast(horizon=252).variance.values[-1, :])/100
         sim_p = [master_data['ltp']]
         np.random.seed(42)
@@ -306,71 +311,155 @@ else:
         
         df_f = pd.DataFrame({'Close': sim_p[1:]}, index=[df.index[-1]+timedelta(days=i) for i in range(1, 253)])
         
+        # Signal Logic
         if strat == "Triple Golden Cross":
-            df_f['S'], df_f['M'], df_f['L'] = df_f['Close'].rolling(10).mean(), df_f['Close'].rolling(50).mean(), df_f['Close'].rolling(200).mean()
+            df_f['S'], df_f['M'], df_f['L'] = df_f['Close'].rolling(s_p).mean(), df_f['Close'].rolling(m_p).mean(), df_f['Close'].rolling(l_p).mean()
             df_f['Signal'] = np.where((df_f['S']>df_f['M']) & (df_f['S']<df_f['L']), 1, 0)
         elif strat == "RSI":
             delta = df_f['Close'].diff()
-            g, l = delta.where(delta>0,0).rolling(14).mean(), -delta.where(delta<0,0).rolling(14).mean()
+            g, l = delta.where(delta>0,0).rolling(r_p).mean(), -delta.where(delta<0,0).rolling(r_p).mean()
             df_f['RSI'] = 100 - (100/(1+(g/l)))
             df_f['Signal'] = np.where(df_f['RSI']<30, 1, 0)
         else:
-            df_f['Signal'] = np.where(df_f['Close'].rolling(20).mean()>df_f['Close'].rolling(50).mean(), 1, 0)
+            df_f['Signal'] = np.where(df_f['Close'].rolling(s_sma).mean()>df_f['Close'].rolling(l_sma).mean(), 1, 0)
             
+        # Summary Table
+        s_ret_fore = df_f['Signal'].shift(1) * df_f['Close'].pct_change()
+        st.write("#### Performance Summary")
+        sum_df = pd.DataFrame({
+            "Metric": ["Annualized Return", "Annualized Risk", "Sharpe Ratio", "No. of Trades"],
+            "Value": [
+                f"{s_ret_fore.mean()*252:.2%}",
+                f"{s_ret_fore.std()*np.sqrt(252):.2%}",
+                f"{(s_ret_fore.mean()*252)/(s_ret_fore.std()*np.sqrt(252)):.2f}" if s_ret_fore.std() != 0 else "0.00",
+                f"{int(df_f['Signal'].diff().abs().sum()/2)}"
+            ]
+        })
+        st.table(sum_df)
+
+        # Forecast Graph with Markers
         fig_sim = go.Figure()
-        fig_sim.add_trace(go.Scatter(x=df_f.index, y=df_f['Close'], name='Forecast'))
+        fig_sim.add_trace(go.Scatter(x=df_f.index, y=df_f['Close'], name='Forecast Price', line=dict(color='gray', width=1)))
+        
         buys = df_f[df_f['Signal'].diff()==1]
-        fig_sim.add_trace(go.Scatter(x=buys.index, y=buys['Close'], mode='markers', marker=dict(symbol='triangle-up', size=10, color='green'), name='Buy'))
+        sells = df_f[df_f['Signal'].diff()==-1]
+        
+        fig_sim.add_trace(go.Scatter(x=buys.index, y=buys['Close'], mode='markers', marker=dict(symbol='triangle-up', size=12, color='green'), name='BUY Signal'))
+        fig_sim.add_trace(go.Scatter(x=sells.index, y=sells['Close'], mode='markers', marker=dict(symbol='triangle-down', size=12, color='red'), name='SELL Signal'))
+        
         st.plotly_chart(fig_sim, use_container_width=True)
 
-    # --- TAB 4: MARKET RISK ---
-    with tab4:
-        st.title("Market Risk Analysis")
+    # --- TAB 5: MARKET RISK (UPDATED) ---
+    with tab5:
+        st.title("⚠️ Market Risk Analysis")
         
+        # Inputs for VaR
+        st.subheader("VaR Configuration")
+        mr_c1, mr_c2 = st.columns(2)
+        conf_level = mr_c1.selectbox("Confidence Level", [0.90, 0.95, 0.99], index=1)
+        time_pd = mr_c2.number_input("Time Horizon", min_value=1, value=10)
+        time_unit = mr_c2.selectbox("Unit", ["Days", "Weeks", "Months"])
+        
+        # Scaling Factor
+        t_days = time_pd * (5 if time_unit=="Weeks" else 21 if time_unit=="Months" else 1)
+        scale_f = np.sqrt(t_days)
+        
+        # Calculate VaRs
+        mu = returns.mean() * t_days
+        sigma = returns.std() * scale_f
+        
+        # 1. Academic (Parametric Normal)
+        var_academic = norm.ppf(1-conf_level, mu, sigma)
+        
+        # 2. Historical
+        hist_loss = returns * np.sqrt(t_days) # Simple approximation for historical scaling
+        var_historic = np.percentile(hist_loss, (1-conf_level)*100)
+        
+        # 3. CVaR (Expected Shortfall)
+        cvar_val = hist_loss[hist_loss <= var_historic].mean()
+        
+        # 4. Industry (Modified/Cornish-Fisher)
+        z = norm.ppf(1-conf_level)
+        s = skew(returns)
+        k = kurtosis(returns)
+        z_mod = z + (z**2 - 1)*s/6 + (z**3 - 3*z)*(k-3)/24 - (2*z**3 - 5*z)*(s**2)/36
+        var_industry = mu + z_mod*sigma
+
+        # Display Metrics
+        st.subheader(f"Risk Metrics ({time_pd} {time_unit} @ {conf_level:.0%})")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Academic VaR (Normal)", f"{var_academic:.2%}")
+        m2.metric("Historical VaR", f"{var_historic:.2%}")
+        m3.metric("CVaR (Expected Shortfall)", f"{cvar_val:.2%}")
+        m4.metric("Modified VaR (Industry)", f"{var_industry:.2%}")
+
+        # Charts
+        st.divider()
         c1, c2 = st.columns(2)
         with c1:
+            st.subheader("Return Distribution & VaR Cutoff")
+            fig_dist = px.histogram(hist_loss, nbins=50, title="Projected Loss Distribution")
+            fig_dist.add_vline(x=var_historic, line_color="red", line_dash="dash", annotation_text="VaR")
+            st.plotly_chart(fig_dist, use_container_width=True)
+            
+        with c2:
             st.subheader("Rolling Beta (60D)")
             cov = returns.rolling(60).cov(mkt_rets)
             beta_roll = cov / mkt_rets.rolling(60).var()
             st.line_chart(beta_roll)
-        with c2:
-            st.subheader("QQ Plot")
-            qq = probplot(returns, dist="norm")
-            fig_qq = px.scatter(x=qq[0][0], y=qq[0][1], labels={'x':'Theoretical','y':'Sample'})
-            fig_qq.add_trace(go.Scatter(x=[-3,3], y=[-3*returns.std(), 3*returns.std()], mode='lines', line=dict(color='red')))
-            st.plotly_chart(fig_qq, use_container_width=True)
-            
-        st.subheader("Stress Testing (Hypothetical P&L)")
-        capital = st.number_input("Portfolio Capital (₹)", 100000)
-        scenarios = {"Mild (-10%)": -0.1, "Bear (-20%)": -0.2, "Crash (-30%)": -0.3}
-        stress_df = pd.DataFrame([{"Event": k, "Loss": capital*v} for k,v in scenarios.items()])
-        st.bar_chart(stress_df.set_index("Event"))
 
-    # --- TAB 5: CREDIT RISK ---
-    with tab5:
-        st.title("Credit Risk (Merton/KMV)")
-        st.info(f"Total Debt: ₹{master_data['total_debt']:,.2f} Cr | Market Cap: ₹{master_data['market_cap']:,.2f} Cr")
+    # --- TAB 4: CREDIT RISK (FULLY RESTORED) ---
+    with tab4:
+        st.title("🛡️ Credit Risk (Merton/KMV Model)")
+        st.table(pd.DataFrame({
+            "Component": ["ST Debt", "LT Debt", "Total Debt", "Market Cap"],
+            "Value (Cr ₹)": [
+                f"{master_data['st_debt']:,.2f}", 
+                f"{master_data['lt_debt']:,.2f}", 
+                f"{master_data['total_debt']:,.2f}", 
+                f"{master_data['market_cap']:,.2f}"
+            ]
+        }))
+
+        m_frame = st.radio("Model Framework", ["Merton Model", "KMV Model"])
         
-        barr = st.number_input("Default Barrier (Debt Threshold)", value=float(master_data['total_debt']))
-        
-        def solve_merton(p):
-            V, sv = p; T=1; r=rf_rate; L=barr; E=master_data['market_cap']; se=ann_vol
-            d1 = (np.log(V/L) + (r + 0.5*sv**2)*T) / (sv*np.sqrt(T))
-            d2 = d1 - sv*np.sqrt(T)
-            return [V*norm.cdf(d1) - L*np.exp(-r*T)*norm.cdf(d2) - E, (norm.cdf(d1)*V/E)*sv - se]
+        # Determine Default Barrier
+        if m_frame == "KMV Model":
+            barr = master_data['st_debt'] + 0.5 * master_data['lt_debt']
+        else:
+            barr = master_data['total_debt']
             
+        barr = st.number_input("Final Default Barrier (Threshold)", value=float(barr) if barr > 0 else 5000.0)
+
+        def solve_m(E, se, L, r, T):
+            def eq(p):
+                V, sv = p; d1 = (np.log(V/L) + (r + 0.5 * sv**2) * T) / (sv * np.sqrt(T));
+                d2 = d1 - sv * np.sqrt(T)
+                return [V * norm.cdf(d1) - L * np.exp(-r * T) * norm.cdf(d2) - E, (norm.cdf(d1) * V / E) * sv - se]
+            return fsolve(eq, [E + L, se * (E / (E + L))])
+        
         try:
-            if barr>0:
-                V_impl, sv_impl = fsolve(solve_merton, [master_data['market_cap']+barr, ann_vol])
-                dd = (np.log(V_impl/barr) + (rf_rate - 0.5*sv_impl**2)) / sv_impl
-                st.metric("Distance to Default", f"{dd:.2f} σ")
-                st.metric("Probability of Default", f"{norm.cdf(-dd):.4%}")
-            else: st.warning("Debt data unavailable for calculation.")
-        except: st.error("Solver failed due to extreme data values.")
+            if barr > 0 and master_data['market_cap'] > 0:
+                va, sa = solve_m(master_data['market_cap'], ann_vol, barr, rf_rate, 1.0)
+                dd_v = (np.log(va/barr) + (rf_rate - 0.5 * sa**2)) / sa
+                pd_v = norm.cdf(-dd_v)
+                
+                c_c1, c_c2, c_c3, c_c4 = st.columns(4)
+                c_c1.metric("Distance to Default", f"{dd_v:.2f} σ")
+                c_c2.metric("Prob. of Default", f"{pd_v:.4%}")
+                c_c3.metric("Implied Asset Value", f"₹{va:,.0f} Cr")
+                c_c4.metric("Implied Asset Vol", f"{sa:.2%}")
+                
+                st.divider()
+                st.write(f"**Interpretation:** The firm is **{dd_v:.2f} standard deviations** away from default. A Distance-to-Default (DD) below 1.5σ typically signals financial distress.")
+            else:
+                st.warning("Insufficient Debt/Equity data for Credit Risk Model.")
+        except: 
+            st.error("Solver Error: Financial ratios are too extreme for convergence.")
 
     # --- TAB 6: COMPARISON ---
     with tab6:
-        st.title("Multi-Stock Comparison")
+        st.title("⚖️ Multi-Stock Comparison")
         comp_str = st.text_input("Tickers (comma sep)", "RELIANCE.NS, TCS.NS, HDFCBANK.NS")
         
         if st.button("Compare Peers"):
