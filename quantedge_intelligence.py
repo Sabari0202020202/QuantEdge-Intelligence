@@ -459,6 +459,7 @@ else:
         except: 
             st.error("Solver Error: Financial ratios are too extreme for convergence.")
     # --- TAB 6: COMPARISON (Updated) ---
+    # --- TAB 6: COMPARISON (Corrected & Extended) ---
     with tab6:
         st.title("⚖️ Multi-Stock Comparison")
         comp_str = st.text_input("Tickers (comma sep)", "RELIANCE.NS, TCS.NS, HDFCBANK.NS")
@@ -466,40 +467,40 @@ else:
         if st.button("Compare Peers"):
             tickers = [x.strip() for x in comp_str.split(',')]
             
-            # Lists to store data for different purposes
-            raw_metrics = [] # For calculations and charts
-            display_data = [] # For the formatted table
-            
-            # DataFrame for Cumulative Returns Chart
-            cum_ret_df = pd.DataFrame()
+            # 1. Initialize Containers
+            raw_metrics = []   # For Technicals (Float values for math)
+            fund_data = []     # For Fundamentals (Float values for math)
+            cum_ret_df = pd.DataFrame() # For Charts
             
             start_dt = (datetime.now()-timedelta(days=lookback_yrs*365)).strftime('%Y-%m-%d')
-            
             progress_bar = st.progress(0)
             
+            # 2. Main Data Loop
             for i, t in enumerate(tickers):
+                # Fetch Data
                 d = get_simple_data(t, start_dt)
+                
+                # Fetch Fundamentals (Handle potential errors)
+                try:
+                    info = yf.Ticker(t).info
+                except:
+                    info = {}
+
                 if not d.empty:
-                    # Calculations
+                    # --- Technical Calcs ---
                     ret = d['Close'].pct_change().dropna()
                     days = (d.index[-1] - d.index[0]).days
                     years = days / 365.25
                     
-                    # 1. Annualized Return (CAGR)
                     total_ret = (d['Close'].iloc[-1] / d['Close'].iloc[0])
                     cagr = (total_ret ** (1/years)) - 1
-                    
-                    # 2. Annualized Volatility
                     vol = ret.std() * np.sqrt(252)
-                    
-                    # 3. Sharpe Ratio
                     sharpe = (cagr - rf_rate) / vol if vol != 0 else 0
                     
-                    # 4. Max Drawdown
                     dd = (d['Close'] - d['Close'].cummax()) / d['Close'].cummax()
                     max_dd = dd.min()
                     
-                    # Store Raw (for logic/charts)
+                    # Store Raw Technicals
                     raw_metrics.append({
                         "Ticker": t,
                         "Ann. Return": cagr,
@@ -508,59 +509,57 @@ else:
                         "Max DD": max_dd
                     })
                     
-                    # Store Formatted (for display)
-                    display_data.append({
+                    # Store Raw Fundamentals
+                    fund_data.append({
                         "Ticker": t,
-                        "Ann. Return (%)": f"{cagr*100:.2f}",
-                        "Ann. Risk (%)": f"{vol*100:.2f}",
-                        "Sharpe Ratio": f"{sharpe:.2f}",
-                        "Max Drawdown (%)": f"{max_dd*100:.2f}"
+                        "Market Cap (Cr)": info.get("marketCap", 0) / 1e7,
+                        "P/E Ratio": info.get("trailingPE", 0) or 0,
+                        "P/B Ratio": info.get("priceToBook", 0) or 0,
+                        "Div Yield (%)": (info.get("dividendYield", 0) or 0) * 100,
+                        "Debt/Eq": info.get("debtToEquity", 0) or 0,
+                        "Beta": info.get("beta", 0) or 0
                     })
-                    
-                    # Add to Cumulative Returns DF (Normalized to 100)
+
+                    # Add to Time Series DF (Normalized to 100)
                     cum_ret_df[t] = (d['Close'] / d['Close'].iloc[0]) * 100
                 
                 progress_bar.progress((i + 1) / len(tickers))
             
-            # --- 1. TABLE GENERATION ---
+            # --- 3. RENDERING (Happens AFTER loop) ---
             if raw_metrics:
-                # Convert raw metrics to DF for "Winner" calculation
+                # A) PERFORMANCE TABLE
                 df_raw = pd.DataFrame(raw_metrics).set_index("Ticker")
                 
-                # Determine Winners
+                # Calculate Winners
                 winners = {}
                 for col in df_raw.columns:
                     if col in ["Ann. Risk", "Max DD"]:
-                        # For Risk/Drawdown, Lower is Better (Note: Max DD is negative, so Max value (closest to 0) is better)
-                        if col == "Max DD":
-                             win_ticker = df_raw[col].idxmax() # Closest to 0 (e.g., -0.1 is better than -0.5)
-                        else:
-                             win_ticker = df_raw[col].idxmin() # Lowest Volatility
+                        # Lower Volatility is better. MaxDD is negative, so Max (closest to 0) is better.
+                        if col == "Max DD": winners[col] = df_raw[col].idxmax()
+                        else: winners[col] = df_raw[col].idxmin()
                     else:
-                        # For Return/Sharpe, Higher is Better
-                        win_ticker = df_raw[col].idxmax()
-                    winners[col] = win_ticker
+                        winners[col] = df_raw[col].idxmax() # Higher is better for Return/Sharpe
 
-                # Create Display DataFrame
-                df_disp = pd.DataFrame(display_data).set_index("Ticker")
+                # Format Data for Display
+                df_disp = df_raw.copy()
+                df_disp["Ann. Return"] = df_disp["Ann. Return"].apply(lambda x: f"{x*100:.2f}%")
+                df_disp["Ann. Risk"] = df_disp["Ann. Risk"].apply(lambda x: f"{x*100:.2f}%")
+                df_disp["Sharpe"] = df_disp["Sharpe"].apply(lambda x: f"{x:.2f}")
+                df_disp["Max DD"] = df_disp["Max DD"].apply(lambda x: f"{x*100:.2f}%")
                 
-                # Map raw column names to display column names for the winner row
-                col_map = {
-                    "Ann. Return": "Ann. Return (%)",
-                    "Ann. Risk": "Ann. Risk (%)",
-                    "Sharpe": "Sharpe Ratio",
-                    "Max DD": "Max Drawdown (%)"
+                # Add Winner Row
+                winner_disp = {
+                    "Ann. Return": winners["Ann. Return"],
+                    "Ann. Risk": winners["Ann. Risk"],
+                    "Sharpe": winners["Sharpe"],
+                    "Max DD": winners["Max DD"]
                 }
-                
-                winner_row = {col_map[k]: v for k, v in winners.items()}
-                
-                # Append Winner Row
-                df_disp.loc['🏆 WINNER'] = pd.Series(winner_row)
+                df_disp.loc['🏆 WINNER'] = pd.Series(winner_disp)
                 
                 st.subheader("Performance Matrix")
                 st.table(df_disp)
-                
-                # --- 2. CHARTS ---
+
+                # B) PERFORMANCE CHARTS
                 st.divider()
                 col_c1, col_c2 = st.columns(2)
                 
@@ -572,27 +571,53 @@ else:
                     
                 with col_c2:
                     st.subheader("Risk-Adjusted Return (Sharpe)")
-                    # Sort by Sharpe for better visualization
                     df_raw_sorted = df_raw.sort_values(by="Sharpe", ascending=False).reset_index()
                     fig_sharpe = px.bar(df_raw_sorted, x="Ticker", y="Sharpe", color="Ticker", 
                                         text_auto='.2f', title="Sharpe Ratio Comparison")
                     fig_sharpe.update_layout(showlegend=False)
                     st.plotly_chart(fig_sharpe, use_container_width=True)
-            else:
-                st.error("No valid data found for the selected tickers.")  
 
+                # C) FUNDAMENTAL TABLE
+                st.divider()
+                st.subheader("🏭 Fundamental Valuation Comparison")
+                
+                if fund_data:
+                    df_fund_raw = pd.DataFrame(fund_data).set_index("Ticker")
+                    
+                    # Fundamental Winners Logic
+                    f_winners = {}
+                    # Lower is better (filtering out 0s/negatives for P/E logic if needed, simplifed here)
+                    for col in ["P/E Ratio", "P/B Ratio", "Debt/Eq"]:
+                        valid = df_fund_raw[col][df_fund_raw[col] > 0]
+                        f_winners[col] = valid.idxmin() if not valid.empty else "N/A"
+                    
+                    # Higher is better
+                    f_winners["Div Yield (%)"] = df_fund_raw["Div Yield (%)"].idxmax()
+                    f_winners["Market Cap (Cr)"] = df_fund_raw["Market Cap (Cr)"].idxmax() # Usually bigger is "safer"
+                    f_winners["Beta"] = df_fund_raw["Beta"].idxmin() # Lower beta = less volatile
 
-                # --- 3. ADVANCED COMPARISON VISUALS ---
+                    # Format for Display
+                    df_fund_disp = df_fund_raw.copy()
+                    df_fund_disp["Market Cap (Cr)"] = df_fund_disp["Market Cap (Cr)"].apply(lambda x: f"{x:,.0f}")
+                    df_fund_disp["P/E Ratio"] = df_fund_disp["P/E Ratio"].apply(lambda x: f"{x:.2f}")
+                    df_fund_disp["P/B Ratio"] = df_fund_disp["P/B Ratio"].apply(lambda x: f"{x:.2f}")
+                    df_fund_disp["Div Yield (%)"] = df_fund_disp["Div Yield (%)"].apply(lambda x: f"{x:.2f}%")
+                    df_fund_disp["Debt/Eq"] = df_fund_disp["Debt/Eq"].apply(lambda x: f"{x:.2f}")
+                    df_fund_disp["Beta"] = df_fund_disp["Beta"].apply(lambda x: f"{x:.2f}")
+
+                    df_fund_disp.loc['🏆 WINNER'] = pd.Series(f_winners)
+                    st.table(df_fund_disp)
+
+                # D) ADVANCED VISUALS (Correlation, Scatter, Drawdown)
                 st.divider()
                 st.subheader("🧩 Diversification & Risk Architecture")
                 
-                # Prepare Data for Correlation & Drawdowns
                 all_rets = cum_ret_df.pct_change().dropna()
                 
                 col_d1, col_d2 = st.columns(2)
                 
                 with col_d1:
-                    st.markdown("**Correlation Matrix** (Light = High Corr, Dark = Low Corr)")
+                    st.markdown("**Correlation Matrix**")
                     corr_matrix = all_rets.corr()
                     fig_corr = px.imshow(corr_matrix, text_auto=".2f", aspect="auto", color_continuous_scale="Blues")
                     st.plotly_chart(fig_corr, use_container_width=True)
@@ -603,88 +628,24 @@ else:
                                           text="Ticker", size=[10]*len(df_raw), 
                                           labels={"Ann. Risk": "Annualized Risk (Volatility)", "Ann. Return": "Annualized Return (CAGR)"})
                     fig_scat.update_traces(textposition='top center')
-                    # Add reference lines for average
                     fig_scat.add_vline(x=df_raw["Ann. Risk"].mean(), line_dash="dot", line_color="gray", annotation_text="Avg Risk")
                     fig_scat.add_hline(y=df_raw["Ann. Return"].mean(), line_dash="dot", line_color="gray", annotation_text="Avg Return")
                     st.plotly_chart(fig_scat, use_container_width=True)
 
-                # Drawdown Comparison Chart
-                st.subheader("🌊 Drawdown Profile (Depth of Losses)")
-                # Calculate Drawdowns for all
+                st.subheader("🌊 Drawdown Profile")
+                # Calculate Drawdowns
                 dd_df = pd.DataFrame()
                 for col in cum_ret_df.columns:
-                    # Reconstruct raw prices from normalized data for DD calc (math is same)
                     dd_df[col] = (cum_ret_df[col] - cum_ret_df[col].cummax()) / cum_ret_df[col].cummax()
                 
                 fig_dd = px.area(dd_df, x=dd_df.index, y=dd_df.columns, 
                                  labels={"value": "Drawdown %", "variable": "Ticker"}, title="Historical Drawdowns")
                 fig_dd.update_yaxes(tickformat=".1%")
-                st.plotly_chart(fig_dd, use_container_width=True)   
+                st.plotly_chart(fig_dd, use_container_width=True)
 
-                # ... (Existing setup code in Tab 6)
+            else:
+                st.error("No valid data found.")
 
-                # Lists for Fundamental Data
-                fund_data = []
-    
-                for i, t in enumerate(tickers):
-                    d = get_simple_data(t, start_dt)
-                    
-                    # Fetch Fundamentals using yf.Ticker
-                    try:
-                        info = yf.Ticker(t).info
-                    except:
-                        info = {}
-    
-                    if not d.empty:
-                        # ... (Your existing Return/Risk calculations here) ...
-                        # ... (Keep your existing raw_metrics and display_data appends here) ...
-                        
-                        # --- NEW: Capture Fundamentals ---
-                        fund_data.append({
-                            "Ticker": t,
-                            "Market Cap (Cr)": info.get("marketCap", 0) / 1e7,
-                            "P/E Ratio": info.get("trailingPE", 0),
-                            "P/B Ratio": info.get("priceToBook", 0),
-                            "Div Yield (%)": (info.get("dividendYield", 0) or 0) * 100,
-                            "Debt/Eq": info.get("debtToEquity", 0),
-                            "Beta": info.get("beta", 0)
-                        })
-                        
-                    progress_bar.progress((i + 1) / len(tickers))
-                 # ... (After st.table(df_disp)) ...
 
-                st.divider()
-                st.subheader("🏭 Fundamental Valuation Comparison")
-                
-                if fund_data:
-                    df_fund = pd.DataFrame(fund_data).set_index("Ticker")
-                    
-                    # Formatting for cleaner look
-                    df_fund["Market Cap (Cr)"] = df_fund["Market Cap (Cr)"].map('{:,.0f}'.format)
-                    df_fund["P/E Ratio"] = df_fund["P/E Ratio"].map('{:.2f}'.format)
-                    df_fund["P/B Ratio"] = df_fund["P/B Ratio"].map('{:.2f}'.format)
-                    df_fund["Div Yield (%)"] = df_fund["Div Yield (%)"].map('{:.2f}%'.format)
-                    df_fund["Beta"] = df_fund["Beta"].map('{:.2f}'.format)
-                    
-                    # Winner Logic for Fundamentals
-                    fund_winners = {}
-                    # Logic: Lower PE/PB/Debt is better. Higher Yield is better.
-                    for col in ["P/E Ratio", "P/B Ratio", "Debt/Eq"]:
-                        # Convert back to float for comparison, filtering out 0s if needed
-                        numeric_col = pd.to_numeric(df_fund[col].astype(str).str.replace('%',''), errors='coerce')
-                        # Filter out 0 or NaN which might indicate missing data rather than "low valuation"
-                        valid = numeric_col[numeric_col > 0]
-                        if not valid.empty:
-                            fund_winners[col] = valid.idxmin() # Lowest is winner
-                        else:
-                            fund_winners[col] = "N/A"
 
-                    # Higher Yield is winner
-                    numeric_yield = pd.to_numeric(df_fund["Div Yield (%)"].str.replace('%',''), errors='coerce')
-                    fund_winners["Div Yield (%)"] = numeric_yield.idxmax()
-                    
-                    # Add Winner Row
-                    df_fund.loc['🏆 WINNER'] = pd.Series(fund_winners)
-                    
-                    st.table(df_fund)
-                    st.caption("*Note: Lower P/E & P/B generally indicate better value. Higher Yield indicates better passive income.*")   
+
