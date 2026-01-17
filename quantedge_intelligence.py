@@ -619,4 +619,72 @@ else:
                 fig_dd = px.area(dd_df, x=dd_df.index, y=dd_df.columns, 
                                  labels={"value": "Drawdown %", "variable": "Ticker"}, title="Historical Drawdowns")
                 fig_dd.update_yaxes(tickformat=".1%")
-                st.plotly_chart(fig_dd, use_container_width=True)     
+                st.plotly_chart(fig_dd, use_container_width=True)   
+
+                # ... (Existing setup code in Tab 6)
+
+                # Lists for Fundamental Data
+                fund_data = []
+    
+                for i, t in enumerate(tickers):
+                    d = get_simple_data(t, start_dt)
+                    
+                    # Fetch Fundamentals using yf.Ticker
+                    try:
+                        info = yf.Ticker(t).info
+                    except:
+                        info = {}
+    
+                    if not d.empty:
+                        # ... (Your existing Return/Risk calculations here) ...
+                        # ... (Keep your existing raw_metrics and display_data appends here) ...
+                        
+                        # --- NEW: Capture Fundamentals ---
+                        fund_data.append({
+                            "Ticker": t,
+                            "Market Cap (Cr)": info.get("marketCap", 0) / 1e7,
+                            "P/E Ratio": info.get("trailingPE", 0),
+                            "P/B Ratio": info.get("priceToBook", 0),
+                            "Div Yield (%)": (info.get("dividendYield", 0) or 0) * 100,
+                            "Debt/Eq": info.get("debtToEquity", 0),
+                            "Beta": info.get("beta", 0)
+                        })
+                        
+                    progress_bar.progress((i + 1) / len(tickers))
+                 # ... (After st.table(df_disp)) ...
+
+                st.divider()
+                st.subheader("🏭 Fundamental Valuation Comparison")
+                
+                if fund_data:
+                    df_fund = pd.DataFrame(fund_data).set_index("Ticker")
+                    
+                    # Formatting for cleaner look
+                    df_fund["Market Cap (Cr)"] = df_fund["Market Cap (Cr)"].map('{:,.0f}'.format)
+                    df_fund["P/E Ratio"] = df_fund["P/E Ratio"].map('{:.2f}'.format)
+                    df_fund["P/B Ratio"] = df_fund["P/B Ratio"].map('{:.2f}'.format)
+                    df_fund["Div Yield (%)"] = df_fund["Div Yield (%)"].map('{:.2f}%'.format)
+                    df_fund["Beta"] = df_fund["Beta"].map('{:.2f}'.format)
+                    
+                    # Winner Logic for Fundamentals
+                    fund_winners = {}
+                    # Logic: Lower PE/PB/Debt is better. Higher Yield is better.
+                    for col in ["P/E Ratio", "P/B Ratio", "Debt/Eq"]:
+                        # Convert back to float for comparison, filtering out 0s if needed
+                        numeric_col = pd.to_numeric(df_fund[col].astype(str).str.replace('%',''), errors='coerce')
+                        # Filter out 0 or NaN which might indicate missing data rather than "low valuation"
+                        valid = numeric_col[numeric_col > 0]
+                        if not valid.empty:
+                            fund_winners[col] = valid.idxmin() # Lowest is winner
+                        else:
+                            fund_winners[col] = "N/A"
+
+                    # Higher Yield is winner
+                    numeric_yield = pd.to_numeric(df_fund["Div Yield (%)"].str.replace('%',''), errors='coerce')
+                    fund_winners["Div Yield (%)"] = numeric_yield.idxmax()
+                    
+                    # Add Winner Row
+                    df_fund.loc['🏆 WINNER'] = pd.Series(fund_winners)
+                    
+                    st.table(df_fund)
+                    st.caption("*Note: Lower P/E & P/B generally indicate better value. Higher Yield indicates better passive income.*")   
