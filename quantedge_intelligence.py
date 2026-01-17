@@ -459,7 +459,7 @@ else:
         except: 
             st.error("Solver Error: Financial ratios are too extreme for convergence.")
     # --- TAB 6: COMPARISON (Updated) ---
-    # --- TAB 6: COMPARISON (Corrected & Extended) ---
+    # --- TAB 6: COMPARISON (Corrected) ---
     with tab6:
         st.title("⚖️ Multi-Stock Comparison")
         comp_str = st.text_input("Tickers (comma sep)", "RELIANCE.NS, TCS.NS, HDFCBANK.NS")
@@ -468,19 +468,17 @@ else:
             tickers = [x.strip() for x in comp_str.split(',')]
             
             # 1. Initialize Containers
-            raw_metrics = []   # For Technicals (Float values for math)
-            fund_data = []     # For Fundamentals (Float values for math)
-            cum_ret_df = pd.DataFrame() # For Charts
+            raw_metrics = []   
+            fund_data = []     
+            cum_ret_df = pd.DataFrame() 
             
             start_dt = (datetime.now()-timedelta(days=lookback_yrs*365)).strftime('%Y-%m-%d')
             progress_bar = st.progress(0)
             
             # 2. Main Data Loop
             for i, t in enumerate(tickers):
-                # Fetch Data
                 d = get_simple_data(t, start_dt)
                 
-                # Fetch Fundamentals (Handle potential errors)
                 try:
                     info = yf.Ticker(t).info
                 except:
@@ -525,7 +523,7 @@ else:
                 
                 progress_bar.progress((i + 1) / len(tickers))
             
-            # --- 3. RENDERING (Happens AFTER loop) ---
+            # --- 3. RENDERING ---
             if raw_metrics:
                 # A) PERFORMANCE TABLE
                 df_raw = pd.DataFrame(raw_metrics).set_index("Ticker")
@@ -534,11 +532,10 @@ else:
                 winners = {}
                 for col in df_raw.columns:
                     if col in ["Ann. Risk", "Max DD"]:
-                        # Lower Volatility is better. MaxDD is negative, so Max (closest to 0) is better.
                         if col == "Max DD": winners[col] = df_raw[col].idxmax()
                         else: winners[col] = df_raw[col].idxmin()
                     else:
-                        winners[col] = df_raw[col].idxmax() # Higher is better for Return/Sharpe
+                        winners[col] = df_raw[col].idxmax() 
 
                 # Format Data for Display
                 df_disp = df_raw.copy()
@@ -547,7 +544,6 @@ else:
                 df_disp["Sharpe"] = df_disp["Sharpe"].apply(lambda x: f"{x:.2f}")
                 df_disp["Max DD"] = df_disp["Max DD"].apply(lambda x: f"{x*100:.2f}%")
                 
-                # Add Winner Row
                 winner_disp = {
                     "Ann. Return": winners["Ann. Return"],
                     "Ann. Risk": winners["Ann. Risk"],
@@ -584,19 +580,15 @@ else:
                 if fund_data:
                     df_fund_raw = pd.DataFrame(fund_data).set_index("Ticker")
                     
-                    # Fundamental Winners Logic
                     f_winners = {}
-                    # Lower is better (filtering out 0s/negatives for P/E logic if needed, simplifed here)
                     for col in ["P/E Ratio", "P/B Ratio", "Debt/Eq"]:
                         valid = df_fund_raw[col][df_fund_raw[col] > 0]
                         f_winners[col] = valid.idxmin() if not valid.empty else "N/A"
                     
-                    # Higher is better
                     f_winners["Div Yield (%)"] = df_fund_raw["Div Yield (%)"].idxmax()
-                    f_winners["Market Cap (Cr)"] = df_fund_raw["Market Cap (Cr)"].idxmax() # Usually bigger is "safer"
-                    f_winners["Beta"] = df_fund_raw["Beta"].idxmin() # Lower beta = less volatile
+                    f_winners["Market Cap (Cr)"] = df_fund_raw["Market Cap (Cr)"].idxmax() 
+                    f_winners["Beta"] = df_fund_raw["Beta"].idxmin() 
 
-                    # Format for Display
                     df_fund_disp = df_fund_raw.copy()
                     df_fund_disp["Market Cap (Cr)"] = df_fund_disp["Market Cap (Cr)"].apply(lambda x: f"{x:,.0f}")
                     df_fund_disp["P/E Ratio"] = df_fund_disp["P/E Ratio"].apply(lambda x: f"{x:.2f}")
@@ -608,7 +600,7 @@ else:
                     df_fund_disp.loc['🏆 WINNER'] = pd.Series(f_winners)
                     st.table(df_fund_disp)
 
-                # D) ADVANCED VISUALS (Correlation, Scatter, Drawdown)
+                # D) ADVANCED VISUALS
                 st.divider()
                 st.subheader("🧩 Diversification & Risk Architecture")
                 
@@ -624,7 +616,8 @@ else:
                     
                 with col_d2:
                     st.markdown("**Risk-Return Scatter** (Top-Left is Ideal)")
-                    fig_scat = px.scatter(df_raw, x="Ann. Risk", y="Ann. Return", color="Ticker", 
+                    # FIX: Using df_raw.reset_index() here to ensure 'Ticker' is a column
+                    fig_scat = px.scatter(df_raw.reset_index(), x="Ann. Risk", y="Ann. Return", color="Ticker", 
                                           text="Ticker", size=[10]*len(df_raw), 
                                           labels={"Ann. Risk": "Annualized Risk (Volatility)", "Ann. Return": "Annualized Return (CAGR)"})
                     fig_scat.update_traces(textposition='top center')
@@ -633,7 +626,6 @@ else:
                     st.plotly_chart(fig_scat, use_container_width=True)
 
                 st.subheader("🌊 Drawdown Profile")
-                # Calculate Drawdowns
                 dd_df = pd.DataFrame()
                 for col in cum_ret_df.columns:
                     dd_df[col] = (cum_ret_df[col] - cum_ret_df[col].cummax()) / cum_ret_df[col].cummax()
@@ -645,7 +637,3 @@ else:
 
             else:
                 st.error("No valid data found.")
-
-
-
-
